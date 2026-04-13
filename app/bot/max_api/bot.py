@@ -1,22 +1,25 @@
 """
 MAX Bot Wrapper
 
-Main bot class that wraps MAX API functionality.
-This is a placeholder implementation that should be adapted
-to the actual MAX API when documentation is available.
+Integration layer for maxapi library.
+This module provides compatibility with our architecture while using
+the official maxapi library for MAX messenger API.
+
+Documentation:
+- MAX API: https://dev.max.ru/docs-api
+- maxapi library: https://github.com/love-apples/maxapi
 """
 
 import logging
 from typing import Any
 
-import aiohttp
+from maxapi import Bot as MAXAPIClient
+from maxapi.types import InlineKeyboardAttachment, Message
 
 from .types import (
     InlineKeyboardMarkup,
-    Message,
     ParseMode,
     ReplyKeyboardMarkup,
-    User,
 )
 
 logger = logging.getLogger(__name__)
@@ -24,52 +27,54 @@ logger = logging.getLogger(__name__)
 
 class MAXBot:
     """
-    MAX Bot wrapper for sending messages and handling updates.
+    MAX Bot wrapper around maxapi library.
     
     This class provides a familiar interface similar to aiogram's Bot class
-    but wraps the MAX messenger API.
-    
-    TODO: Implement actual MAX API calls when documentation is available
+    while using the official maxapi library underneath.
     """
     
-    def __init__(self, token: str, base_url: str = "https://api.max.ru"):
+    def __init__(
+        self,
+        token: str,
+        base_url: str = "https://platform-api.max.ru",
+    ):
         """
         Initialize MAX Bot.
         
         Args:
-            token: Bot authentication token.
-            base_url: MAX API base URL.
+            token: Bot authentication token from MAX.
+            base_url: MAX API base URL (default: platform-api.max.ru).
         """
         self.token = token
         self.base_url = base_url
-        self._session: aiohttp.ClientSession | None = None
+        self._client = MAXAPIClient(token=token)
         
-        logger.info("MAX Bot initialized (placeholder implementation)")
+        logger.info("MAX Bot initialized with maxapi library")
     
-    async def _get_session(self) -> aiohttp.ClientSession:
-        """Get or create HTTP session."""
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession(
-                headers={"Authorization": f"Bearer {self.token}"}
-            )
-        return self._session
+    @property
+    def client(self) -> MAXAPIClient:
+        """Get underlying maxapi client for direct access."""
+        return self._client
     
-    async def close(self):
-        """Close HTTP session."""
-        if self._session and not self._session.closed:
-            await self._session.close()
-            logger.info("MAX Bot session closed")
-    
-    async def get_me(self) -> User:
+    async def get_me(self) -> dict[str, Any]:
         """
         Get bot information.
         
         Returns:
-            User object with bot information.
+            Dictionary with bot information:
+            - user_id: int
+            - name: str
+            - username: str
+            - is_bot: bool
+            - last_activity_time: int
         """
-        # TODO: Implement actual API call
-        logger.warning("get_me() not implemented - returning mock data")
-        return User(id=0, username="mock_bot", first_name="Mock Bot")
+        try:
+            me = await self._client.get_me()
+            logger.debug(f"Bot info retrieved: {me.username}")
+            return me
+        except Exception as e:
+            logger.error(f"Failed to get bot info: {e}")
+            raise
     
     async def send_message(
         self,
@@ -84,24 +89,44 @@ class MAXBot:
         
         Args:
             chat_id: Target chat ID.
-            text: Message text.
-            parse_mode: Message parse mode (HTML, Markdown).
+            text: Message text (supports HTML/Markdown formatting).
+            parse_mode: Message parse mode (HTML or Markdown).
             reply_markup: Keyboard markup.
             disable_web_page_preview: Disable link previews.
             
         Returns:
-            Message object of the sent message.
+            Message object from maxapi.
         """
-        # TODO: Implement actual API call
-        logger.debug(f"Sending message to {chat_id}: {text[:50]}...")
-        
-        # Mock implementation
-        return Message(
-            message_id=0,
-            chat_id=chat_id,
-            from_user=User(id=0, username="bot"),
-            text=text,
-        )
+        try:
+            # Prepare format
+            format_mode = None
+            if parse_mode == ParseMode.HTML:
+                format_mode = "html"
+            elif parse_mode in (ParseMode.MARKDOWN, ParseMode.MARKDOWN_V2):
+                format_mode = "markdown"
+            
+            # Build attachments for inline keyboard
+            attachments = []
+            if reply_markup and isinstance(reply_markup, InlineKeyboardMarkup):
+                keyboard_attachment = InlineKeyboardAttachment(
+                    buttons=reply_markup.inline_keyboard
+                )
+                attachments.append(keyboard_attachment)
+            
+            # Send message using maxapi
+            message = await self._client.send_message(
+                chat_id=chat_id,
+                text=text,
+                format=format_mode,
+                attachments=attachments if attachments else None,
+            )
+            
+            logger.debug(f"Message sent to {chat_id}")
+            return message
+            
+        except Exception as e:
+            logger.error(f"Failed to send message to {chat_id}: {e}")
+            raise
     
     async def edit_message_text(
         self,
@@ -124,15 +149,36 @@ class MAXBot:
         Returns:
             Updated Message object.
         """
-        # TODO: Implement actual API call
-        logger.debug(f"Editing message {message_id} in chat {chat_id}")
-        
-        return Message(
-            message_id=message_id,
-            chat_id=chat_id,
-            from_user=User(id=0, username="bot"),
-            text=text,
-        )
+        try:
+            # Prepare format
+            format_mode = None
+            if parse_mode == ParseMode.HTML:
+                format_mode = "html"
+            elif parse_mode in (ParseMode.MARKDOWN, ParseMode.MARKDOWN_V2):
+                format_mode = "markdown"
+            
+            # Build attachments
+            attachments = []
+            if reply_markup:
+                keyboard_attachment = InlineKeyboardAttachment(
+                    buttons=reply_markup.inline_keyboard
+                )
+                attachments.append(keyboard_attachment)
+            
+            # Edit message
+            message = await self._client.edit_message(
+                message_id=message_id,
+                text=text,
+                format=format_mode,
+                attachments=attachments if attachments else None,
+            )
+            
+            logger.debug(f"Message {message_id} edited")
+            return message
+            
+        except Exception as e:
+            logger.error(f"Failed to edit message {message_id}: {e}")
+            raise
     
     async def delete_message(self, chat_id: int, message_id: int) -> bool:
         """
@@ -145,9 +191,13 @@ class MAXBot:
         Returns:
             True if deleted successfully.
         """
-        # TODO: Implement actual API call
-        logger.debug(f"Deleting message {message_id} in chat {chat_id}")
-        return True
+        try:
+            await self._client.delete_message(message_id=message_id)
+            logger.debug(f"Message {message_id} deleted")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to delete message {message_id}: {e}")
+            return False
     
     async def answer_callback_query(
         self,
@@ -160,29 +210,41 @@ class MAXBot:
         
         Args:
             callback_query_id: Callback query ID.
-            text: Answer text.
+            text: Answer text (optional).
             show_alert: Show alert popup.
             
         Returns:
             True if successful.
         """
-        # TODO: Implement actual API call
-        logger.debug(f"Answering callback query: {callback_query_id}")
-        return True
+        try:
+            await self._client.answer_callback(
+                callback_id=callback_query_id,
+                text=text,
+                show_alert=show_alert,
+            )
+            logger.debug(f"Callback query {callback_query_id} answered")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to answer callback {callback_query_id}: {e}")
+            return False
     
     async def set_webhook(self, url: str) -> bool:
         """
         Set webhook for receiving updates.
         
         Args:
-            url: Webhook URL.
+            url: Webhook URL (must be HTTPS).
             
         Returns:
             True if successful.
         """
-        # TODO: Implement actual API call
-        logger.info(f"Webhook set to: {url}")
-        return True
+        try:
+            await self._client.set_webhook(url=url)
+            logger.info(f"Webhook set to: {url}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to set webhook: {e}")
+            return False
     
     async def delete_webhook(self) -> bool:
         """
@@ -191,9 +253,13 @@ class MAXBot:
         Returns:
             True if successful.
         """
-        # TODO: Implement actual API call
-        logger.info("Webhook deleted")
-        return True
+        try:
+            await self._client.delete_webhook()
+            logger.info("Webhook deleted")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to delete webhook: {e}")
+            return False
     
     async def get_webhook_info(self) -> dict[str, Any]:
         """
@@ -202,10 +268,17 @@ class MAXBot:
         Returns:
             Dictionary with webhook info.
         """
-        # TODO: Implement actual API call
-        return {"url": "", "has_custom_certificate": False, "pending_update_count": 0}
+        try:
+            info = await self._client.get_webhook_info()
+            return info
+        except Exception as e:
+            logger.error(f"Failed to get webhook info: {e}")
+            return {"url": "", "has_custom_certificate": False, "pending_update_count": 0}
     
-    @property
-    def session(self):
-        """Get HTTP session for webhook handlers."""
-        return self._session
+    async def close(self):
+        """Close bot session."""
+        try:
+            await self._client.close()
+            logger.info("MAX Bot session closed")
+        except Exception as e:
+            logger.error(f"Error closing bot session: {e}")

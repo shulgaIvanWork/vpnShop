@@ -9,8 +9,8 @@ package-mode = false
 [tool.poetry.dependencies]
 python = "^3.12"
 
-# MAX Messenger (replace aiogram)
-# maxapi - will be added when available on PyPi or from source
+# MAX Messenger
+maxapi = "^1.0.0"
 
 # 3X-UI Client (async)
 # client3x - will be added when available
