@@ -7,8 +7,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column, relationship, selectinload
 
-from app.bot.utils.constants import DEFAULT_LANGUAGE
-
 from . import Base
 
 logger = logging.getLogger(__name__)
@@ -16,153 +14,127 @@ logger = logging.getLogger(__name__)
 
 class User(Base):
     """
-    Represents a user in the database.
+    Represents a user in the MAX VPN shop.
 
     Attributes:
         id (int): Unique primary key for the user.
-        tg_id (int): Unique Telegram user ID.
-        vpn_id (str): Unique VPN identifier for the user.
-        server_id (int | None): Foreign key referencing the server.
-        first_name (str): First name of the user.
-        username (str | None): Telegram username of the user.
+        max_user_id (int): Unique MAX user ID.
+        username (str | None): MAX username.
+        subscription_end (datetime | None): Subscription expiration timestamp.
+        device_limit (int): Number of allowed devices (default: 1).
+        uuid (str | None): VPN client UUID.
+        assigned_server (str | None): IP of assigned 3X-UI panel.
         created_at (datetime): Timestamp when the user was created.
-        server (Server | None): Associated server object.
-        transactions (list[Transaction]): List of transactions associated with the user.
-        activated_promocodes (list[Promocode]): List of promocodes activated by the user.
-        referrals_sent (list[Referral]): List of Referrals sent by the user and applied by referred users.
-        referral (Referral | None): The Referral record if this user was invited.
+        payments (list[Payment]): List of payments made by the user.
+        referrals_sent (list[Referral]): Referrals made by this user.
+        referral (Referral | None): Referral record if invited by someone.
+        coupons (list[Coupon]): Coupons owned by the user.
+        corporate_server (CorporateServer | None): Corporate server if applicable.
     """
 
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    tg_id: Mapped[int] = mapped_column(unique=True, nullable=False)
-    vpn_id: Mapped[str] = mapped_column(String(36), unique=True, nullable=False)
-    server_id: Mapped[int | None] = mapped_column(
-        ForeignKey("servers.id", ondelete="SET NULL"), nullable=True
-    )
-    first_name: Mapped[str] = mapped_column(String(length=32), nullable=False)
-    username: Mapped[str | None] = mapped_column(String(length=32), nullable=True)
-    language_code: Mapped[str] = mapped_column(
-        String(length=5),
-        nullable=False,
-        default=DEFAULT_LANGUAGE,
-    )
-    created_at: Mapped[datetime] = mapped_column(default=func.now(), nullable=False)
-    server: Mapped["Server | None"] = relationship("Server", back_populates="users", uselist=False)  # type: ignore
-    transactions: Mapped[list["Transaction"]] = relationship("Transaction", back_populates="user")  # type: ignore
-    activated_promocodes: Mapped[list["Promocode"]] = relationship(  # type: ignore
-        "Promocode", back_populates="activated_user"
-    )
-    is_trial_used: Mapped[bool] = mapped_column(default=False, nullable=False)
-    referrals_sent: Mapped[list["Referral"]] = relationship(  # type: ignore
+    max_user_id: Mapped[int] = mapped_column(unique=True, nullable=False)
+    username: Mapped[str | None] = mapped_column(String(length=100), nullable=True)
+    subscription_end: Mapped[datetime | None] = mapped_column(nullable=True)
+    device_limit: Mapped[int] = mapped_column(default=1, nullable=False)
+    uuid: Mapped[str | None] = mapped_column(String(36), unique=True, nullable=True)
+    assigned_server: Mapped[str | None] = mapped_column(String(length=255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
+
+    # Relationships
+    payments: Mapped[list["Payment"]] = relationship("Payment", back_populates="user")
+    referrals_sent: Mapped[list["Referral"]] = relationship(
         "Referral",
-        foreign_keys="Referral.referrer_tg_id",
-        primaryjoin="User.tg_id == Referral.referrer_tg_id",
+        foreign_keys="Referral.referrer_id",
+        primaryjoin="User.id == Referral.referrer_id",
         back_populates="referrer",
         cascade="all, delete-orphan",
     )
-    referral: Mapped["Referral | None"] = relationship(  # type: ignore
+    referral: Mapped["Referral | None"] = relationship(
         "Referral",
-        foreign_keys="Referral.referred_tg_id",
-        primaryjoin="User.tg_id == Referral.referred_tg_id",
+        foreign_keys="Referral.referred_id",
+        primaryjoin="User.id == Referral.referred_id",
         back_populates="referred",
         uselist=False,
     )
-    source_invite_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    coupons: Mapped[list["Coupon"]] = relationship("Coupon", back_populates="user")
+    corporate_server: Mapped["CorporateServer | None"] = relationship(
+        "CorporateServer", back_populates="user", uselist=False
+    )
 
     def __repr__(self) -> str:
         return (
-            f"<User(id={self.id}, tg_id={self.tg_id}, vpn_id='{self.vpn_id}', "
-            f"server_id={self.server_id}, first_name='{self.first_name}', "
-            f"username='{self.username}', language_code='{self.language_code}', "
-            f"created_at={self.created_at}, is_trial_used={self.is_trial_used})>"
+            f"<User(id={self.id}, max_user_id={self.max_user_id}, "
+            f"username='{self.username}', subscription_end={self.subscription_end}, "
+            f"device_limit={self.device_limit})>"
         )
 
     @classmethod
-    async def get(cls, session: AsyncSession, tg_id: int) -> Self | None:
-        filter = [User.tg_id == tg_id]
+    async def get(cls, session: AsyncSession, max_user_id: int) -> Self | None:
+        """Get user by MAX user ID."""
         query = await session.execute(
             select(User)
             .options(
-                selectinload(User.transactions),
-                selectinload(User.activated_promocodes),
-                selectinload(User.server),
+                selectinload(User.payments),
+                selectinload(User.coupons),
+                selectinload(User.corporate_server),
             )
-            .where(*filter)
+            .where(User.max_user_id == max_user_id)
         )
         user = query.scalar_one_or_none()
 
         if user:
-            logger.debug(f"User {tg_id} retrieved from the database.")
-            return user
+            logger.debug(f"User {max_user_id} retrieved from the database.")
+        else:
+            logger.debug(f"User {max_user_id} not found in the database.")
 
-        logger.debug(f"User {tg_id} not found in the database.")
-        return None
+        return user
 
     @classmethod
     async def get_all(cls, session: AsyncSession) -> list[Self]:
-        query = await session.execute(select(User).options(selectinload(User.server)))
+        """Get all users."""
+        query = await session.execute(select(User))
         return query.scalars().all()
 
     @classmethod
-    async def create(cls, session: AsyncSession, tg_id: int, **kwargs: Any) -> Self | None:
-        user = await User.get(session=session, tg_id=tg_id)
+    async def create(cls, session: AsyncSession, max_user_id: int, **kwargs: Any) -> Self | None:
+        """Create a new user."""
+        user = await User.get(session=session, max_user_id=max_user_id)
 
         if user:
-            logger.warning(f"User {tg_id} already exists.")
+            logger.warning(f"User {max_user_id} already exists.")
             return None
 
-        user = User(tg_id=tg_id, **kwargs)
+        user = User(max_user_id=max_user_id, **kwargs)
         session.add(user)
 
         try:
             await session.commit()
-            logger.debug(f"User {tg_id} created.")
+            logger.debug(f"User {max_user_id} created.")
             return user
         except IntegrityError as exception:
             await session.rollback()
-            logger.error(f"Error occurred while creating user {tg_id}: {exception}")
+            logger.error(f"Error occurred while creating user {max_user_id}: {exception}")
             return None
 
     @classmethod
-    async def update(cls, session: AsyncSession, tg_id: int, **kwargs: Any) -> Self | None:
-        user = await User.get(session=session, tg_id=tg_id)
+    async def update(cls, session: AsyncSession, max_user_id: int, **kwargs: Any) -> Self | None:
+        """Update user fields."""
+        user = await User.get(session=session, max_user_id=max_user_id)
 
         if user:
-            filter = [User.tg_id == tg_id]
+            filter = [User.max_user_id == max_user_id]
             await session.execute(update(User).where(*filter).values(**kwargs))
             await session.commit()
-            logger.debug(f"User {tg_id} updated.")
+            logger.debug(f"User {max_user_id} updated.")
             return user
 
-        logger.warning(f"User {tg_id} not found in the database.")
+        logger.warning(f"User {max_user_id} not found in the database.")
         return None
 
     @classmethod
-    async def exists(cls, session: AsyncSession, tg_id: int) -> bool:
-        return await User.get(session=session, tg_id=tg_id) is not None
-
-    @classmethod
-    async def update_trial_status(cls, session: AsyncSession, tg_id: int, used: bool) -> bool:
-        """
-        Updates the trial status of a user.
-
-        Args:
-            session (AsyncSession): Database session.
-            tg_id (int): Telegram user ID.
-            used (bool): Whether the trial has been used.
-
-        Returns:
-            bool: True if updated, False otherwise.
-        """
-        user = await cls.get(session=session, tg_id=tg_id)
-
-        if not user:
-            logger.warning(f"User {tg_id} not found to update trial status.")
-            return False
-
-        await session.execute(update(User).where(User.tg_id == tg_id).values(is_trial_used=used))
-        await session.commit()
-        logger.info(f"Trial status updated for user {tg_id}: {used}")
-        return True
+    async def exists(cls, session: AsyncSession, max_user_id: int) -> bool:
+        """Check if user exists."""
+        return await User.get(session=session, max_user_id=max_user_id) is not None
