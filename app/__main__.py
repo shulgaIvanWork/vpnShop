@@ -1,178 +1,183 @@
+"""
+MAX VPN Bot - Main Entry Point
+
+Application initialization and startup.
+"""
+
 import asyncio
 import logging
 from urllib.parse import urljoin
 
-from aiogram import Bot, Dispatcher
-from aiogram.client.default import DefaultBotProperties
-from aiogram.enums import ParseMode
-from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.fsm.storage.redis import RedisStorage
-from aiogram.utils.i18n import I18n
-from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp.web import Application, _run_app
-from redis.asyncio.client import Redis
 
 from app import logger
-from app.bot import filters, middlewares, routers, services, tasks
-from app.bot.middlewares import MaintenanceMiddleware
+from app.bot.max_api import MAXBot, MAXDispatcher
+from app.bot.max_api.types import Update
 from app.bot.models import ServicesContainer
-from app.bot.payment_gateways import GatewayFactory
-from app.bot.utils import commands
-from app.bot.utils.constants import (
-    BOT_STARTED_TAG,
-    BOT_STOPPED_TAG,
-    DEFAULT_LANGUAGE,
-    I18N_DOMAIN,
-    TELEGRAM_WEBHOOK,
-)
-from app.config import DEFAULT_BOT_HOST, DEFAULT_LOCALES_DIR, Config, load_config
+from app.bot.utils.constants import BOT_STARTED_TAG, BOT_STOPPED_TAG
+from app.config import Config, load_config
 from app.db.database import Database
 
-
-async def on_shutdown(db: Database, bot: Bot, services: ServicesContainer) -> None:
-    await services.notification.notify_developer(BOT_STOPPED_TAG)
-    await commands.delete(bot)
-    await bot.delete_webhook()
-    await bot.session.close()
-    await db.close()
-    logging.info("Bot stopped.")
+logger = logging.getLogger(__name__)
 
 
 async def on_startup(
     config: Config,
-    bot: Bot,
+    bot: MAXBot,
     services: ServicesContainer,
     db: Database,
-    redis: Redis,
-    i18n: I18n,
 ) -> None:
-    webhook_url = urljoin(config.bot.DOMAIN, TELEGRAM_WEBHOOK)
-
-    if await bot.get_webhook_info() != webhook_url:
-        await bot.set_webhook(webhook_url)
-
-    current_webhook = await bot.get_webhook_info()
-    logging.info(f"Current webhook URL: {current_webhook.url}")
-
+    """
+    Handle bot startup.
+    
+    Args:
+        config: Application configuration.
+        bot: MAX Bot instance.
+        services: Services container.
+        db: Database instance.
+    """
     await services.notification.notify_developer(BOT_STARTED_TAG)
-    logging.info("Bot started.")
+    logger.info("🚀 MAX VPN Bot started successfully!")
+    logger.info(f"Database: {config.db.NAME}")
+    logger.info(f"Bot domain: {config.bot.DOMAIN}")
 
-    tasks.transactions.start_scheduler(db.session)
-    if config.shop.REFERRER_REWARD_ENABLED:
-        tasks.referral.start_scheduler(
-            session_factory=db.session, referral_service=services.referral
-        )
-    tasks.subscription_expiry.start_scheduler(
-        session_factory=db.session,
-        redis=redis,
-        i18n=i18n,
-        vpn_service=services.vpn,
-        notification_service=services.notification,
-    )
+
+async def on_shutdown(
+    config: Config,
+    bot: MAXBot,
+    services: ServicesContainer,
+    db: Database,
+) -> None:
+    """
+    Handle bot shutdown.
+    
+    Args:
+        config: Application configuration.
+        bot: MAX Bot instance.
+        services: Services container.
+        db: Database instance.
+    """
+    await services.notification.notify_developer(BOT_STOPPED_TAG)
+    await db.close()
+    logger.info("🛑 MAX VPN Bot stopped.")
 
 
 async def main() -> None:
-    # Create web application
-    app = Application()
-
+    """Main application entry point."""
+    
     # Load configuration
     config = load_config()
-
-    # Set up logging
-    logger.setup_logging(config.logging)
-
+    logger.info("Configuration loaded")
+    
     # Initialize database
-    db = Database(config.database)
+    db = Database(config)
     await db.initialize()
-
-    # Set up storage for FSM (Finite State Machine)
-    storage = RedisStorage.from_url(url=config.redis.url())
-    # storage = MemoryStorage()
-
-    # Initialize the bot with the token and default properties
-    bot = Bot(
-        token=config.bot.TOKEN,
-        default=DefaultBotProperties(
-            parse_mode=ParseMode.HTML, link_preview_is_disabled=True
-        ),
-    )
-
-    # Set up internationalization (i18n)
-    i18n = I18n(
-        path=DEFAULT_LOCALES_DIR,
-        default_locale=DEFAULT_LANGUAGE,
-        domain=I18N_DOMAIN,
-    )
-    I18n.set_current(i18n)
-
-    # Initialize services
-    services_container = await services.initialize(
+    logger.info("Database initialized")
+    
+    # Create services container
+    bot = MAXBot(token=config.bot.TOKEN)
+    services = ServicesContainer.create(
         config=config,
+        bot=bot,
         session=db.session,
-        bot=bot,
     )
+    logger.info("Services initialized")
+    
+    # Create dispatcher
+    dispatcher = MAXDispatcher()
+    
+    # Register handlers
+    await register_handlers(dispatcher, bot, services, config)
+    
+    # Setup startup/shutdown handlers
+    async def startup_handler():
+        await on_startup(config, bot, services, db)
+    
+    async def shutdown_handler():
+        await on_shutdown(config, bot, services, db)
+    
+    # Add lifecycle handlers
+    dispatcher.on_startup(startup_handler)
+    dispatcher.on_shutdown(shutdown_handler)
+    
+    # Start polling
+    logger.info("Starting polling...")
+    await dispatcher.start_polling(bot)
 
-    # Sync servers
-    await services_container.server_pool.sync_servers()
 
-    # Register payment gateways
-    gateway_factory = GatewayFactory()
-    gateway_factory.register_gateways(
-        app=app,
-        config=config,
-        session=db.session,
-        storage=storage,
-        bot=bot,
-        i18n=i18n,
-        services=services_container,
-    )
-
-    # Create the dispatcher
-    dispatcher = Dispatcher(
-        db=db,
-        storage=storage,
-        config=config,
-        bot=bot,
-        services=services_container,
-        gateway_factory=gateway_factory,
-        redis=storage.redis,
-        i18n=i18n,
-    )
-
-    # Register event handlers
-    dispatcher.startup.register(on_startup)
-    dispatcher.shutdown.register(on_shutdown)
-
-    # Enable Maintenance mode for developing # WARNING: remove before production
-    MaintenanceMiddleware.set_mode(False)
-
-    # Register middlewares
-    middlewares.register(dispatcher=dispatcher, i18n=i18n, session=db.session)
-
-    # Register filters
-    filters.register(
-        dispatcher=dispatcher,
-        developer_id=config.bot.DEV_ID,
-        admins_ids=config.bot.ADMINS,
-    )
-
-    # Include bot routers
-    routers.include(app=app, dispatcher=dispatcher)
-
-    # Set up bot commands
-    await commands.setup(bot)
-
-    # Set up webhook request handler
-    webhook_requests_handler = SimpleRequestHandler(dispatcher=dispatcher, bot=bot)
-    webhook_requests_handler.register(app, path=TELEGRAM_WEBHOOK)
-
-    # Set up application and run
-    setup_application(app, dispatcher, bot=bot)
-    await _run_app(app, host=DEFAULT_BOT_HOST, port=config.bot.PORT)
+async def register_handlers(
+    dispatcher: MAXDispatcher,
+    bot: MAXBot,
+    services: ServicesContainer,
+    config: Config,
+) -> None:
+    """
+    Register all bot handlers.
+    
+    Args:
+        dispatcher: MAX Dispatcher instance.
+        bot: MAX Bot instance.
+        services: Services container.
+        config: Application configuration.
+    """
+    from app.bot.routers.main_menu.handler import handle_start, handle_menu
+    
+    # /start command
+    @dispatcher.message_handler(commands=["start"])
+    async def start_handler(update: Update):
+        await handle_start(
+            bot=bot,
+            update=update,
+            services=services,
+            config=config,
+            new_user=True,
+        )
+    
+    # /menu command
+    @dispatcher.message_handler(commands=["menu"])
+    async def menu_handler(update: Update):
+        await handle_menu(
+            bot=bot,
+            update=update,
+            services=services,
+            config=config,
+        )
+    
+    # Callback handler for menu buttons
+    @dispatcher.callback_query_handler(lambda c: c.data.startswith("menu_"))
+    async def menu_callback_handler(update: Update):
+        callback_data = update.callback_query.data
+        
+        if callback_data == "menu_subscription":
+            await bot.send_message(
+                chat_id=update.callback_query.from_user.id,
+                text="💳 Раздел подписки (в разработке)",
+                parse_mode="html",
+            )
+        elif callback_data == "menu_profile":
+            await bot.send_message(
+                chat_id=update.callback_query.from_user.id,
+                text="👤 Раздел профиля (в разработке)",
+                parse_mode="html",
+            )
+        elif callback_data == "menu_referral":
+            await bot.send_message(
+                chat_id=update.callback_query.from_user.id,
+                text="🎁 Реферальная программа (в разработке)",
+                parse_mode="html",
+            )
+        elif callback_data == "menu_support":
+            await bot.send_message(
+                chat_id=update.callback_query.from_user.id,
+                text="💬 Поддержка (в разработке)",
+                parse_mode="html",
+            )
 
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        logging.info("Bot stopped.")
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
+    except Exception as e:
+        logger.error(f"Fatal error: {e}")
