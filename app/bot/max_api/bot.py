@@ -282,3 +282,42 @@ class MAXBot:
             logger.info("MAX Bot session closed")
         except Exception as e:
             logger.error(f"Error closing bot session: {e}")
+    
+    async def get_updates(
+        self,
+        offset: int | None = None,
+        limit: int = 100,
+        timeout: int = 30,
+    ) -> list[dict]:
+        """
+        Get updates from MAX API (polling mode).
+        
+        Args:
+            offset: ID of first update to return.
+            limit: Maximum number of updates to retrieve.
+            timeout: Timeout in seconds for long polling.
+            
+        Returns:
+            List of update dictionaries.
+        """
+        try:
+            params = {
+                "offset": offset,
+                "limit": limit,
+                "timeout": timeout,
+            }
+            
+            response = await self._client.get_updates(**params)
+            
+            # Convert response to list of dicts
+            if isinstance(response, list):
+                return response
+            elif hasattr(response, '__iter__'):
+                return [update.__dict__ if hasattr(update, '__dict__') else update for update in response]
+            else:
+                logger.warning(f"Unexpected response format from get_updates: {type(response)}")
+                return []
+                
+        except Exception as e:
+            logger.error(f"Failed to get updates: {e}")
+            return []

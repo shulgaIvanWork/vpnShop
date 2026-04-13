@@ -87,6 +87,19 @@ class InlineKeyboardMarkup:
         self.inline_keyboard.append(list(buttons))
         return self
     
+    def add_row(self, buttons: list[dict]) -> 'InlineKeyboardMarkup':
+        """
+        Add a row of buttons to the keyboard.
+        
+        Args:
+            buttons: List of button dicts.
+            
+        Returns:
+            Self for chaining.
+        """
+        self.inline_keyboard.append(buttons)
+        return self
+    
     def row(self, *buttons: dict) -> 'InlineKeyboardMarkup':
         """Add a row of buttons (alias for add)."""
         return self.add(*buttons)

@@ -11,6 +11,7 @@ TODO: Replace with actual MAX API implementation when documentation is available
 """
 
 from .bot import MAXBot
+from .dispatcher import MAXDispatcher
 from .types import (
     Message,
     User,
@@ -24,6 +25,7 @@ from .types import (
 
 __all__ = [
     "MAXBot",
+    "MAXDispatcher",
     "Message",
     "User",
     "CallbackQuery",
