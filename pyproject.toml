@@ -1,24 +1,43 @@
 [tool.poetry]
-name = "3xui-shop"
+name = "max-vpn-bot"
 version = "1.0.0"
-description = "This is a Telegram bot for selling VPN subscriptions. It works with 3X-UI."
-authors = ["snoups"]
+description = "MAX bot for selling VPN subscriptions with 3X-UI integration"
+authors = ["shulgaIvanWork"]
 readme = "README.md"
 package-mode = false
 
 [tool.poetry.dependencies]
 python = "^3.12"
-aiogram = "^3.15.0"
-babel = "^2.16.0"
-environs = "^11.2.1"
-cachetools = "^5.5.0"
-py3xui = "^0.3.2"
+
+# MAX Messenger (replace aiogram)
+# maxapi - will be added when available on PyPi or from source
+
+# 3X-UI Client (async)
+# client3x - will be added when available
+
+# Payment Gateways
 yookassa = "^3.4.3"
+yoomoney = "^0.1.0"
+
+# Database
 sqlalchemy = {extras = ["asyncio"], version = "^2.0.36"}
-aiosqlite = "^0.20.0"
+asyncpg = "^0.30.0"
 alembic = "^1.14.0"
 redis = "^5.2.1"
+
+# AI Support
+openai = "^1.50.0"  # DeepSeek uses OpenAI-compatible API
+
+# Security
+cryptography = "^44.0.0"
+
+# Utilities
+environs = "^11.2.1"
+cachetools = "^5.5.0"
 apscheduler = "^3.11.0"
+
+# HTTP Client
+aiohttp = "^3.11.0"
 
 [build-system]
 requires = ["poetry-core"]
