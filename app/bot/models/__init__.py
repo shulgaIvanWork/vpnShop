@@ -1,5 +1,13 @@
-from .client_data import ClientData
-from .invite_stats import InviteStats
-from .plan import Plan
-from .services_container import ServicesContainer
+"""
+Bot Models
+
+Contains all Pydantic models and data containers for the bot.
+"""
+
 from .subscription_data import SubscriptionData
+from .services import ServicesContainer
+
+__all__ = [
+    "SubscriptionData",
+    "ServicesContainer",
+]
