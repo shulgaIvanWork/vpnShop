@@ -1,187 +1,241 @@
+"""
+Subscription Handler
+
+Handles subscription plan selection and purchase flow.
+"""
+
 import logging
 
-from aiogram import F, Router
-from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery
-from aiogram.utils.i18n import gettext as _
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.bot.models import ClientData, ServicesContainer, SubscriptionData
-from app.bot.payment_gateways import GatewayFactory
-from app.bot.utils.navigation import NavSubscription
+from app.bot.max_api import MAXBot
+from app.bot.max_api.types import InlineKeyboardMarkup, Update
+from app.bot.models import ServicesContainer, SubscriptionData
+from app.bot.services import ServicesContainer
 from app.config import Config
 from app.db.models import User
 
-from .keyboard import (
-    devices_keyboard,
-    duration_keyboard,
-    payment_method_keyboard,
-    subscription_keyboard,
-)
-
 logger = logging.getLogger(__name__)
-router = Router(name=__name__)
 
 
-async def show_subscription(
-    callback: CallbackQuery,
-    client_data: ClientData | None,
-    callback_data: SubscriptionData,
-) -> None:
-    if client_data:
-
-        if client_data.has_subscription_expired:
-            text = _("subscription:message:expired")
-        else:
-            text = _("subscription:message:active").format(
-                devices=client_data.max_devices,
-                expiry_time=client_data.expiry_time,
+def create_plans_keyboard() -> InlineKeyboardMarkup:
+    """
+    Create subscription plans keyboard.
+    
+    Returns:
+        InlineKeyboardMarkup with plan options.
+    """
+    keyboard = InlineKeyboardMarkup()
+    
+    # Plan options (will be loaded from plans.json in production)
+    plans = [
+        {"duration": 30, "price": 299, "label": "1 месяц"},
+        {"duration": 180, "price": 1499, "label": "6 месяцев"},
+        {"duration": 365, "price": 2499, "label": "1 год"},
+    ]
+    
+    for plan in plans:
+        keyboard.add_row([
+            InlineKeyboardMarkup.callback_button(
+                f"📅 {plan['label']} - {plan['price']}₽",
+                f"plan_{plan['duration']}_{plan['price']}",
             )
-    else:
-        text = _("subscription:message:not_active")
+        ])
+    
+    # Back button
+    keyboard.add_row([
+        InlineKeyboardMarkup.callback_button("⬅️ Назад", "menu"),
+    ])
+    
+    return keyboard
 
-    await callback.message.edit_text(
+
+async def handle_subscription_menu(
+    bot: MAXBot,
+    update: Update,
+    services: ServicesContainer,
+    config: Config,
+) -> None:
+    """
+    Handle subscription menu command.
+    
+    Args:
+        bot: MAX Bot instance.
+        update: Update object.
+        services: Services container.
+        config: Application configuration.
+    """
+    user_id = update.message.from_user.id if update.message else update.callback_query.from_user.id
+    
+    # Get user from database
+    async with config.db.session() as session:
+        user = await User.get(session, max_user_id=user_id)
+    
+    text = (
+        "💳 <b>Выберите тарифный план</b>\n\n"
+        "📊 <b>Доступные планы:</b>\n"
+        "• 1 месяц - 299₽\n"
+        "• 6 месяцев - 1499₽ (экономия 295₽)\n"
+        "• 1 год - 2499₽ (экономия 1089₽)\n\n"
+        "✨ <b>Все планы включают:</b>\n"
+        "• 🌍 Неограниченный трафик\n"
+        "• ⚡ Высокая скорость\n"
+        "• 🔒 Полная анонимность\n"
+        "• 📱 До 5 устройств\n"
+        "• 🎁 Реферальные скидки"
+    )
+    
+    keyboard = create_plans_keyboard()
+    
+    await bot.send_message(
+        chat_id=user_id,
         text=text,
-        reply_markup=subscription_keyboard(
-            has_subscription=client_data,
-            callback_data=callback_data,
-        ),
+        parse_mode="html",
+        reply_markup=keyboard,
     )
+    
+    logger.info(f"Subscription plans shown to user {user_id}")
 
 
-@router.callback_query(F.data == NavSubscription.MAIN)
-async def callback_subscription(
-    callback: CallbackQuery,
-    user: User,
-    state: FSMContext,
+async def handle_plan_selection(
+    bot: MAXBot,
+    update: Update,
     services: ServicesContainer,
-) -> None:
-    logger.info(f"User {user.tg_id} opened subscription page.")
-    await state.set_state(None)
-
-    client_data = None
-    if user.server_id:
-        client_data = await services.vpn.get_client_data(user)
-        if not client_data:
-            await services.notification.show_popup(
-                callback=callback,
-                text=_("subscription:popup:error_fetching_data"),
-            )
-            return
-
-    callback_data = SubscriptionData(state=NavSubscription.PROCESS, user_id=user.tg_id)
-    await show_subscription(callback=callback, client_data=client_data, callback_data=callback_data)
-
-
-@router.callback_query(SubscriptionData.filter(F.state == NavSubscription.EXTEND))
-async def callback_subscription_extend(
-    callback: CallbackQuery,
-    user: User,
-    callback_data: SubscriptionData,
     config: Config,
-    services: ServicesContainer,
+    duration: int,
+    price: float,
 ) -> None:
-    logger.info(f"User {user.tg_id} started extend subscription.")
-    client = await services.vpn.is_client_exists(user)
-
-    current_devices = await services.vpn.get_limit_ip(user=user, client=client)
-    if not services.plan.get_plan(current_devices):
-        await services.notification.show_popup(
-            callback=callback,
-            text=_("subscription:popup:error_fetching_plan"),
-        )
-        return
-
-    callback_data.devices = current_devices
-    callback_data.state = NavSubscription.DURATION
-    callback_data.is_extend = True
-    await callback.message.edit_text(
-        text=_("subscription:message:duration"),
-        reply_markup=duration_keyboard(
-            plan_service=services.plan,
-            callback_data=callback_data,
-            currency=config.shop.CURRENCY,
-        ),
+    """
+    Handle plan selection callback.
+    
+    Args:
+        bot: MAX Bot instance.
+        update: Update object.
+        services: Services container.
+        config: Application configuration.
+        duration: Selected plan duration in days.
+        price: Selected plan price.
+    """
+    user_id = update.callback_query.from_user.id
+    
+    # Acknowledge callback
+    await bot.answer_callback_query(update.callback_query.id)
+    
+    # Create subscription data
+    subscription_data = SubscriptionData.create(
+        user_id=user_id,
+        duration=duration,
+        price=price,
     )
+    
+    text = (
+        f"✅ <b>Вы выбрали план:</b>\n\n"
+        f"📅 Duration: {duration} дней\n"
+        f"💰 Price: {price}₽\n\n"
+        f"Выберите способ оплаты:"
+    )
+    
+    # Create payment method keyboard
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add_row([
+        InlineKeyboardMarkup.callback_button("💳 ЮKassa", "payment_yookassa"),
+        InlineKeyboardMarkup.callback_button("💰 YooMoney", "payment_yoomoney"),
+    ])
+    keyboard.add_row([
+        InlineKeyboardMarkup.callback_button("🎫 Применить купон", "apply_coupon"),
+    ])
+    keyboard.add_row([
+        InlineKeyboardMarkup.callback_button("⬅️ Назад", "menu_subscription"),
+    ])
+    
+    await bot.send_message(
+        chat_id=user_id,
+        text=text,
+        parse_mode="html",
+        reply_markup=keyboard,
+    )
+    
+    logger.info(f"User {user_id} selected plan: {duration} days, {price} RUB")
 
 
-@router.callback_query(SubscriptionData.filter(F.state == NavSubscription.CHANGE))
-async def callback_subscription_change(
-    callback: CallbackQuery,
-    user: User,
-    callback_data: SubscriptionData,
+async def handle_payment_method_selection(
+    bot: MAXBot,
+    update: Update,
     services: ServicesContainer,
-) -> None:
-    logger.info(f"User {user.tg_id} started change subscription.")
-    callback_data.state = NavSubscription.DEVICES
-    callback_data.is_change = True
-    await callback.message.edit_text(
-        text=_("subscription:message:devices"),
-        reply_markup=devices_keyboard(services.plan.get_all_plans(), callback_data),
-    )
-
-
-@router.callback_query(SubscriptionData.filter(F.state == NavSubscription.PROCESS))
-async def callback_subscription_process(
-    callback: CallbackQuery,
-    user: User,
-    session: AsyncSession,
-    callback_data: SubscriptionData,
-    services: ServicesContainer,
-) -> None:
-    logger.info(f"User {user.tg_id} started subscription process.")
-    server = await services.server_pool.get_available_server()
-
-    if not server:
-        await services.notification.show_popup(
-            callback=callback,
-            text=_("subscription:popup:no_available_servers"),
-            cache_time=120,
-        )
-        return
-
-    callback_data.state = NavSubscription.DEVICES
-    await callback.message.edit_text(
-        text=_("subscription:message:devices"),
-        reply_markup=devices_keyboard(services.plan.get_all_plans(), callback_data),
-    )
-
-
-@router.callback_query(SubscriptionData.filter(F.state == NavSubscription.DEVICES))
-async def callback_devices_selected(
-    callback: CallbackQuery,
-    user: User,
-    callback_data: SubscriptionData,
     config: Config,
-    services: ServicesContainer,
+    method: str,
 ) -> None:
-    logger.info(f"User {user.tg_id} selected devices: {callback_data.devices}")
-    callback_data.state = NavSubscription.DURATION
-    await callback.message.edit_text(
-        text=_("subscription:message:duration"),
-        reply_markup=duration_keyboard(
-            plan_service=services.plan,
-            callback_data=callback_data,
-            currency=config.shop.CURRENCY,
-        ),
+    """
+    Handle payment method selection.
+    
+    Args:
+        bot: MAX Bot instance.
+        update: Update object.
+        services: Services container.
+        config: Application configuration.
+        method: Selected payment method (yookassa/yoomoney).
+    """
+    user_id = update.callback_query.from_user.id
+    
+    await bot.answer_callback_query(update.callback_query.id)
+    
+    # TODO: Create payment with selected gateway
+    # For now, show placeholder message
+    
+    text = (
+        f"💳 <b>Оплата через {method}</b>\n\n"
+        f"⚠️ Функция в разработке\n\n"
+        f"В ближайшее время здесь появится ссылка на оплату."
     )
+    
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add_row([
+        InlineKeyboardMarkup.callback_button("⬅️ Назад", "menu_subscription"),
+    ])
+    
+    await bot.send_message(
+        chat_id=user_id,
+        text=text,
+        parse_mode="html",
+        reply_markup=keyboard,
+    )
+    
+    logger.info(f"User {user_id} selected payment method: {method}")
 
 
-@router.callback_query(SubscriptionData.filter(F.state == NavSubscription.DURATION))
-async def callback_duration_selected(
-    callback: CallbackQuery,
-    user: User,
-    callback_data: SubscriptionData,
+async def handle_apply_coupon(
+    bot: MAXBot,
+    update: Update,
     services: ServicesContainer,
-    gateway_factory: GatewayFactory,
+    config: Config,
 ) -> None:
-    logger.info(f"User {user.tg_id} selected duration: {callback_data.duration}")
-    callback_data.state = NavSubscription.PAY
-    await callback.message.edit_text(
-        text=_("subscription:message:payment_method"),
-        reply_markup=payment_method_keyboard(
-            plan=services.plan.get_plan(callback_data.devices),
-            callback_data=callback_data,
-            gateways=gateway_factory.get_gateways(),
-        ),
+    """
+    Handle coupon application request.
+    
+    Args:
+        bot: MAX Bot instance.
+        update: Update object.
+        services: Services container.
+        config: Application configuration.
+    """
+    user_id = update.callback_query.from_user.id
+    
+    await bot.answer_callback_query(update.callback_query.id)
+    
+    text = (
+        "🎫 <b>Применить купон</b>\n\n"
+        "Введите код купона:\n"
+        "(Например: VPN-ABC123XYZ)"
     )
+    
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add_row([
+        InlineKeyboardMarkup.callback_button("⬅️ Назад", "menu_subscription"),
+    ])
+    
+    await bot.send_message(
+        chat_id=user_id,
+        text=text,
+        parse_mode="html",
+        reply_markup=keyboard,
+    )
+    
+    logger.info(f"User {user_id} requested coupon application")

@@ -1,176 +1,199 @@
+"""
+Referral Handler
+
+Handles referral program and coupon management.
+"""
+
 import logging
 
-from aiogram import F, Router
-from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery
-from aiogram.utils.i18n import gettext as _
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.bot.models import ServicesContainer
-from app.bot.utils.constants import (
-    MAIN_MESSAGE_ID_KEY,
-    PREVIOUS_CALLBACK_KEY,
-    ReferrerRewardLevel,
-    ReferrerRewardType,
-)
-from app.bot.utils.formatting import format_subscription_period
-from app.bot.utils.navigation import NavMain, NavReferral
+from app.bot.max_api import MAXBot
+from app.bot.max_api.types import InlineKeyboardMarkup, Update
+from app.bot.services import ServicesContainer
 from app.config import Config
-from app.db.models import Referral, ReferrerReward, User
-
-from .keyboard import referral_keyboard
+from app.db.models import User
 
 logger = logging.getLogger(__name__)
-router = Router(name=__name__)
 
 
-async def generate_referral_summary_text(
-    session: AsyncSession,
-    user: User,
-    config: Config,
-    bot_username: str,
-) -> str:
-    referral_link = f"https://t.me/{bot_username}?start={user.tg_id}"
-
-    text = _("referral:message:user_summary")
-
-    referred_trial_enabled = config.shop.REFERRED_TRIAL_ENABLED
-    if referred_trial_enabled:
-        referred_duration = format_subscription_period(config.shop.REFERRED_TRIAL_PERIOD)
-        text += _("referral:message:user_summary_referred_trial_enabled").format(
-            referred_duration=referred_duration,
-        )
-
-    referrals_count = await Referral.get_referral_count(session=session, referrer_tg_id=user.tg_id)
-    text += _("referral:message:user_summary_invite_link").format(
-        referral_link=referral_link,
-        referrals_count=referrals_count,
-    )
-
-    referrer_reward_enabled = config.shop.REFERRER_REWARD_ENABLED
-
-    if referrer_reward_enabled:
-        reward_type = ReferrerRewardType.from_str(config.shop.REFERRER_REWARD_TYPE)
-        first_level_rewards_sum = await ReferrerReward.get_rewards_sum(
-            session=session,
-            tg_id=user.tg_id,
-            reward_type=reward_type,
-            reward_level=ReferrerRewardLevel.FIRST_LEVEL,
-        )
-        second_level_rewards_sum = await ReferrerReward.get_rewards_sum(
-            session=session,
-            tg_id=user.tg_id,
-            reward_type=reward_type,
-            reward_level=ReferrerRewardLevel.SECOND_LEVEL,
-        )
-
-        if reward_type == ReferrerRewardType.DAYS:
-            first_referrer_duration = format_subscription_period(
-                config.shop.REFERRER_LEVEL_ONE_PERIOD
-            )
-            second_referrer_duration = format_subscription_period(
-                config.shop.REFERRER_LEVEL_TWO_PERIOD
-            )
-            text += _("referral:message:user_summary_explain_referrer_days").format(
-                first_referrer_duration=first_referrer_duration,
-                second_referrer_duration=second_referrer_duration,
-            )
-            first_level_rewards_sum = format_subscription_period(int(first_level_rewards_sum))
-            second_level_rewards_sum = format_subscription_period(int(second_level_rewards_sum))
-        elif reward_type == ReferrerRewardType.MONEY:
-            first_referrer_rate = config.shop.REFERRER_LEVEL_ONE_RATE
-            second_referrer_rate = config.shop.REFERRER_LEVEL_TWO_RATE
-            text += _("referral:message:user_summary_explain_referrer_money").format(
-                first_referrer_rate=first_referrer_rate,
-                second_referrer_rate=second_referrer_rate,
-            )
-
-            # TODO: handle and format money currencies
-
-        pending_rewards_count = await ReferrerReward.get_pending_rewards_count(
-            session=session, user_tg_id=user.tg_id
-        )
-        text += _("referral:message:user_summary_referrer_rewards").format(
-            first_level_rewards_sum=first_level_rewards_sum,
-            second_level_rewards_sum=second_level_rewards_sum,
-            pending_rewards_count=pending_rewards_count,
-        )
-
-    return text
+def create_referral_keyboard() -> InlineKeyboardMarkup:
+    """
+    Create referral program keyboard.
+    
+    Returns:
+        InlineKeyboardMarkup with referral options.
+    """
+    keyboard = InlineKeyboardMarkup()
+    
+    keyboard.add_row([
+        InlineKeyboardMarkup.callback_button("🎁 Мои купоны", "referral_coupons"),
+        InlineKeyboardMarkup.callback_button("📊 Статистика", "referral_stats"),
+    ])
+    
+    keyboard.add_row([
+        InlineKeyboardMarkup.callback_button("⬅️ Назад", "menu"),
+    ])
+    
+    return keyboard
 
 
-@router.callback_query(F.data == NavReferral.MAIN)
-async def callback_referral(
-    callback: CallbackQuery,
-    user: User,
-    state: FSMContext,
-    session: AsyncSession,
-    config: Config,
-) -> None:
-    logger.info(f"User {user.tg_id} opened referral page.")
-
-    bot_username = (await callback.bot.get_me()).username
-
-    await state.update_data({PREVIOUS_CALLBACK_KEY: NavReferral.MAIN})
-
-    await callback.message.edit_text(
-        text=await generate_referral_summary_text(
-            session=session,
-            user=user,
-            config=config,
-            bot_username=bot_username,
-        ),
-        reply_markup=referral_keyboard(),
-    )
-
-
-@router.callback_query(F.data == NavReferral.GET_REFERRED_TRIAL)
-async def callback_get_referred_trial(
-    callback: CallbackQuery,
-    user: User,
-    state: FSMContext,
+async def handle_referral(
+    bot: MAXBot,
+    update: Update,
     services: ServicesContainer,
     config: Config,
 ) -> None:
-    logger.info(f"User {user.tg_id} triggered getting bonus days.")
-
-    server = await services.server_pool.get_available_server()
-
-    if not server:
-        await services.notification.show_popup(
-            callback=callback,
-            text=_("referral:popup:no_available_servers"),
-        )
-        return
-
-    is_referred_trial_available = await services.referral.is_referred_trial_available(user=user)
-
-    if not is_referred_trial_available:
-        await services.notification.show_popup(
-            callback=callback,
-            text=_("referral:popup:trial_unavailable_for_user"),
-        )
-        return
-
-    referred_trial_period = config.shop.REFERRED_TRIAL_PERIOD
-
-    success = await services.referral.reward_referred_user(
-        user=user, days_count=referred_trial_period
+    """
+    Handle referral program command.
+    
+    Args:
+        bot: MAX Bot instance.
+        update: Update object.
+        services: Services container.
+        config: Application configuration.
+    """
+    user_id = update.message.from_user.id if update.message else update.callback_query.from_user.id
+    
+    # TODO: Get actual referral data
+    referral_count = 0
+    discount_percent = 0
+    max_discount = 50
+    
+    # Generate referral link
+    # TODO: Replace with actual bot username
+    bot_username = "YourVPNBot"
+    referral_link = f"https://max.ru/{bot_username}?start=ref_{user_id}"
+    
+    text = (
+        f"🎁 <b>Реферальная программа</b>\n\n"
+        f"👥 Приглашено друзей: <b>{referral_count}</b>\n"
+        f"💰 Ваша скидка: <b>{discount_percent}%</b>\n"
+        f"📈 Максимальная скидка: <b>{max_discount}%</b>\n\n"
+        f"🔗 <b>Ваша реферальная ссылка:</b>\n"
+        f"<code>{referral_link}</code>\n\n"
+        f"💡 <b>Как это работает:</b>\n"
+        f"• Поделитесь ссылкой с друзьями\n"
+        f"• За каждого друга получите +10% скидки\n"
+        f"• Скидка применяется автоматически\n"
+        f"• Максимальная скидка: 50%\n\n"
+        f"🎫 Купоны за рефералов действуют 1 год!"
     )
+    
+    keyboard = create_referral_keyboard()
+    
+    await bot.send_message(
+        chat_id=user_id,
+        text=text,
+        parse_mode="html",
+        reply_markup=keyboard,
+    )
+    
+    logger.info(f"Referral program shown to user {user_id}")
 
-    main_message_id = await state.get_value(MAIN_MESSAGE_ID_KEY)
-    if success:
-        await state.update_data({PREVIOUS_CALLBACK_KEY: NavMain.MAIN_MENU})
-        await callback.bot.edit_message_text(
-            text=_("subscription:ntf:trial_activate_success").format(
-                duration=format_subscription_period(referred_trial_period),
-            ),
-            chat_id=callback.message.chat.id,
-            message_id=main_message_id,
-            reply_markup=referral_keyboard(connect=True),
+
+async def handle_referral_coupons(
+    bot: MAXBot,
+    update: Update,
+    services: ServicesContainer,
+    config: Config,
+) -> None:
+    """
+    Handle user's coupons display.
+    
+    Args:
+        bot: MAX Bot instance.
+        update: Update object.
+        services: Services container.
+        config: Application configuration.
+    """
+    user_id = update.callback_query.from_user.id
+    
+    await bot.answer_callback_query(update.callback_query.id)
+    
+    # Get user's coupons
+    coupons = await services.coupon.get_user_coupons(user_id, include_used=False)
+    
+    if not coupons:
+        text = (
+            f"🎫 <b>Ваши купоны</b>\n\n"
+            f"❌ У вас пока нет активных купонов\n\n"
+            f"💡 Пригласите друзей, чтобы получить купоны со скидкой!"
         )
     else:
-        text = _("referral:ntf:referred_trial_activate_failed")
-        await services.notification.notify_by_message(
-            message=callback.message, text=text, duration=15
-        )
+        text = f"🎫 <b>Ваши купоны ({len(coupons)})</b>\n\n"
+        
+        for coupon in coupons:
+            status = "✅ Активен" if coupon.is_valid else "❌ Истёк"
+            text += (
+                f"📝 Код: <code>{coupon.code}</code>\n"
+                f"💰 Скидка: {coupon.discount_percent}%\n"
+                f"📅 Действует до: {coupon.valid_until.strftime('%d.%m.%Y')}\n"
+                f"Статус: {status}\n\n"
+            )
+    
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add_row([
+        InlineKeyboardMarkup.callback_button("⬅️ Назад", "referral"),
+    ])
+    
+    await bot.send_message(
+        chat_id=user_id,
+        text=text,
+        parse_mode="html",
+        reply_markup=keyboard,
+    )
+    
+    logger.info(f"Coupons shown to user {user_id}: {len(coupons) if coupons else 0}")
+
+
+async def handle_referral_stats(
+    bot: MAXBot,
+    update: Update,
+    services: ServicesContainer,
+    config: Config,
+) -> None:
+    """
+    Handle referral statistics display.
+    
+    Args:
+        bot: MAX Bot instance.
+        update: Update object.
+        services: Services container.
+        config: Application configuration.
+    """
+    user_id = update.callback_query.from_user.id
+    
+    await bot.answer_callback_query(update.callback_query.id)
+    
+    # TODO: Get actual referral statistics
+    # referrals = await Referral.get_user_referrals(session, user_id)
+    
+    total_referrals = 0
+    active_referrals = 0
+    coupons_earned = 0
+    
+    text = (
+        f"📊 <b>Реферальная статистика</b>\n\n"
+        f"👥 Всего приглашено: <b>{total_referrals}</b>\n"
+        f"✅ Активных рефералов: <b>{active_referrals}</b>\n"
+        f"🎫 Купонов получено: <b>{coupons_earned}</b>\n\n"
+        f"💡 <b>Система наград:</b>\n"
+        f"• 1 реферал = 10% скидка\n"
+        f"• 2 реферала = 20% скидка\n"
+        f"• 3 реферала = 30% скидка\n"
+        f"• 4 реферала = 40% скидка\n"
+        f"• 5+ рефералов = 50% скидка (максимум)"
+    )
+    
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add_row([
+        InlineKeyboardMarkup.callback_button("⬅️ Назад", "referral"),
+    ])
+    
+    await bot.send_message(
+        chat_id=user_id,
+        text=text,
+        parse_mode="html",
+        reply_markup=keyboard,
+    )
+    
+    logger.info(f"Referral stats shown to user {user_id}")

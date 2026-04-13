@@ -121,6 +121,29 @@ async def register_handlers(
         config: Application configuration.
     """
     from app.bot.routers.main_menu.handler import handle_start, handle_menu
+    from app.bot.routers.subscription.subscription_handler import (
+        handle_subscription_menu,
+        handle_plan_selection,
+        handle_payment_method_selection,
+        handle_apply_coupon,
+    )
+    from app.bot.routers.profile.handler import (
+        handle_profile,
+        handle_show_key,
+        handle_payment_history,
+    )
+    from app.bot.routers.referral.handler import (
+        handle_referral,
+        handle_referral_coupons,
+        handle_referral_stats,
+    )
+    from app.bot.routers.support.handler import (
+        handle_support,
+        handle_faq,
+        handle_support_contact,
+    )
+    
+    # ===== COMMANDS =====
     
     # /start command
     @dispatcher.message_handler(commands=["start"])
@@ -143,35 +166,102 @@ async def register_handlers(
             config=config,
         )
     
-    # Callback handler for menu buttons
-    @dispatcher.callback_query_handler(lambda c: c.data.startswith("menu_"))
-    async def menu_callback_handler(update: Update):
+    # /subscription command
+    @dispatcher.message_handler(commands=["subscription"])
+    async def subscription_handler(update: Update):
+        await handle_subscription_menu(
+            bot=bot,
+            update=update,
+            services=services,
+            config=config,
+        )
+    
+    # /profile command
+    @dispatcher.message_handler(commands=["profile"])
+    async def profile_handler(update: Update):
+        await handle_profile(
+            bot=bot,
+            update=update,
+            services=services,
+            config=config,
+        )
+    
+    # /referral command
+    @dispatcher.message_handler(commands=["referral"])
+    async def referral_handler(update: Update):
+        await handle_referral(
+            bot=bot,
+            update=update,
+            services=services,
+            config=config,
+        )
+    
+    # /support command
+    @dispatcher.message_handler(commands=["support"])
+    async def support_handler(update: Update):
+        await handle_support(
+            bot=bot,
+            update=update,
+            services=services,
+            config=config,
+        )
+    
+    # ===== CALLBACK HANDLERS =====
+    
+    @dispatcher.callback_query_handler(lambda c: True)
+    async def callback_router(update: Update):
+        """Route all callback queries to appropriate handlers."""
         callback_data = update.callback_query.data
         
-        if callback_data == "menu_subscription":
-            await bot.send_message(
-                chat_id=update.callback_query.from_user.id,
-                text="💳 Раздел подписки (в разработке)",
-                parse_mode="html",
-            )
+        # Main menu callbacks
+        if callback_data == "menu":
+            await handle_menu(bot, update, services, config)
+        elif callback_data == "menu_subscription":
+            await handle_subscription_menu(bot, update, services, config)
         elif callback_data == "menu_profile":
-            await bot.send_message(
-                chat_id=update.callback_query.from_user.id,
-                text="👤 Раздел профиля (в разработке)",
-                parse_mode="html",
-            )
+            await handle_profile(bot, update, services, config)
         elif callback_data == "menu_referral":
-            await bot.send_message(
-                chat_id=update.callback_query.from_user.id,
-                text="🎁 Реферальная программа (в разработке)",
-                parse_mode="html",
-            )
+            await handle_referral(bot, update, services, config)
         elif callback_data == "menu_support":
-            await bot.send_message(
-                chat_id=update.callback_query.from_user.id,
-                text="💬 Поддержка (в разработке)",
-                parse_mode="html",
-            )
+            await handle_support(bot, update, services, config)
+        
+        # Subscription callbacks
+        elif callback_data.startswith("plan_"):
+            # Parse plan_{duration}_{price}
+            parts = callback_data.split("_")
+            duration = int(parts[1])
+            price = float(parts[2])
+            await handle_plan_selection(bot, update, services, config, duration, price)
+        elif callback_data == "payment_yookassa":
+            await handle_payment_method_selection(bot, update, services, config, "yookassa")
+        elif callback_data == "payment_yoomoney":
+            await handle_payment_method_selection(bot, update, services, config, "yoomoney")
+        elif callback_data == "apply_coupon":
+            await handle_apply_coupon(bot, update, services, config)
+        
+        # Profile callbacks
+        elif callback_data == "profile":
+            await handle_profile(bot, update, services, config)
+        elif callback_data == "profile_show_key":
+            await handle_show_key(bot, update, services, config)
+        elif callback_data == "profile_payments":
+            await handle_payment_history(bot, update, services, config)
+        
+        # Referral callbacks
+        elif callback_data == "referral":
+            await handle_referral(bot, update, services, config)
+        elif callback_data == "referral_coupons":
+            await handle_referral_coupons(bot, update, services, config)
+        elif callback_data == "referral_stats":
+            await handle_referral_stats(bot, update, services, config)
+        
+        # Support callbacks
+        elif callback_data == "support":
+            await handle_support(bot, update, services, config)
+        elif callback_data == "support_faq":
+            await handle_faq(bot, update, services, config)
+        elif callback_data == "support_contact":
+            await handle_support_contact(bot, update, services, config)
 
 
 if __name__ == "__main__":
