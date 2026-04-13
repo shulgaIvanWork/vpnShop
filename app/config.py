@@ -7,11 +7,9 @@ from environs import Env
 from marshmallow.validate import OneOf, Range
 
 from app.bot.utils.constants import (
-    DB_FORMAT,
     LOG_GZ_ARCHIVE_FORMAT,
     LOG_ZIP_ARCHIVE_FORMAT,
     Currency,
-    ReferrerRewardType,
 )
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -22,33 +20,33 @@ DEFAULT_PLANS_DIR = DEFAULT_DATA_DIR / "plans.json"
 DEFAULT_BOT_HOST = "0.0.0.0"
 DEFAULT_BOT_PORT = 8080
 
-DEFAULT_SHOP_EMAIL = "support@3xui-shop.com"
+DEFAULT_SHOP_EMAIL = "support@vpn-shop.ru"
 DEFAULT_SHOP_CURRENCY = Currency.RUB.code
-DEFAULT_SHOP_TRIAL_ENABLED = True
-DEFAULT_SHOP_TRIAL_PERIOD = 3
-DEFAULT_SHOP_REFERRED_TRIAL_ENABLED = False
-DEFAULT_SHOP_REFERRED_TRIAL_PERIOD = 7
-DEFAULT_SHOP_REFERRER_REWARD_ENABLED = True
-DEFAULT_SHOP_REFERRER_REWARD_TYPE = ReferrerRewardType.DAYS.value
-DEFAULT_SHOP_REFERRER_LEVEL_ONE_PERIOD = 10
-DEFAULT_SHOP_REFERRER_LEVEL_TWO_PERIOD = 3
-DEFAULT_SHOP_REFERRER_LEVEL_ONE_RATE = 50
-DEFAULT_SHOP_REFERRER_LEVEL_TWO_RATE = 5
-DEFAULT_SHOP_BONUS_DEVICES_COUNT = 1
-DEFAULT_SHOP_PAYMENT_STARS_ENABLED = True
-DEFAULT_SHOP_PAYMENT_CRYPTOMUS_ENABLED = False
-DEFAULT_SHOP_PAYMENT_HELEKET_ENABLED = False
+
+# Payment defaults
 DEFAULT_SHOP_PAYMENT_YOOKASSA_ENABLED = False
 DEFAULT_SHOP_PAYMENT_YOOMONEY_ENABLED = False
-DEFAULT_DB_NAME = "bot_database"
 
+# Database defaults
+DEFAULT_DB_NAME = "vpn_shop"
+DEFAULT_DB_HOST = "postgres"
+DEFAULT_DB_PORT = 5432
+
+# Redis defaults
 DEFAULT_REDIS_DB_NAME = "0"
-DEFAULT_REDIS_HOST = "3xui-shop-redis"
+DEFAULT_REDIS_HOST = "redis"
 DEFAULT_REDIS_PORT = 6379
 
+# 3X-UI defaults
 DEFAULT_SUBSCRIPTION_PORT = 2096
 DEFAULT_SUBSCRIPTION_PATH = "/user/"
 
+# DeepSeek defaults
+DEFAULT_DEEPSEEK_MODEL = "deepseek-chat"
+DEFAULT_DEEPSEEK_MAX_TOKENS = 500
+DEFAULT_DEEPSEEK_TEMPERATURE = 0.3
+
+# Logging defaults
 DEFAULT_LOG_LEVEL = "DEBUG"
 DEFAULT_LOG_FORMAT = "%(asctime)s | %(name)s | %(levelname)s | %(message)s"
 DEFAULT_LOG_ARCHIVE_FORMAT = LOG_ZIP_ARCHIVE_FORMAT
@@ -62,32 +60,19 @@ logger.addHandler(memory_handler)
 
 @dataclass
 class BotConfig:
+    """MAX Bot configuration."""
     TOKEN: str
     ADMINS: list[int]
     DEV_ID: int
-    SUPPORT_ID: int
     DOMAIN: str
     PORT: int
 
 
 @dataclass
 class ShopConfig:
+    """Shop/payment configuration."""
     EMAIL: str
     CURRENCY: str
-    TRIAL_ENABLED: bool
-    TRIAL_PERIOD: int
-    REFERRED_TRIAL_ENABLED: bool
-    REFERRED_TRIAL_PERIOD: int
-    REFERRER_REWARD_ENABLED: bool
-    REFERRER_REWARD_TYPE: str
-    REFERRER_LEVEL_ONE_PERIOD: int
-    REFERRER_LEVEL_TWO_PERIOD: int
-    REFERRER_LEVEL_ONE_RATE: int
-    REFERRER_LEVEL_TWO_RATE: int
-    BONUS_DEVICES_COUNT: int
-    PAYMENT_STARS_ENABLED: bool
-    PAYMENT_CRYPTOMUS_ENABLED: bool
-    PAYMENT_HELEKET_ENABLED: bool
     PAYMENT_YOOKASSA_ENABLED: bool
     PAYMENT_YOOMONEY_ENABLED: bool
 
@@ -102,14 +87,12 @@ class XUIConfig:
 
 
 @dataclass
-class CryptomusConfig:
+class DeepSeekConfig:
+    """DeepSeek AI configuration."""
     API_KEY: str | None
-    MERCHANT_ID: str | None
-
-@dataclass
-class HeleketConfig:
-    API_KEY: str | None
-    MERCHANT_ID: str | None
+    MODEL: str
+    MAX_TOKENS: int
+    TEMPERATURE: float
 
 @dataclass
 class YooKassaConfig:
@@ -124,16 +107,31 @@ class YooMoneyConfig:
 
 
 @dataclass
-class DatabaseConfig:
-    HOST: str | None
-    PORT: int | None
-    NAME: str
-    USERNAME: str | None
-    PASSWORD: str | None
+class DeepSeekConfig:
+    """DeepSeek AI configuration."""
+    API_KEY: str | None
+    MODEL: str
+    MAX_TOKENS: int
+    TEMPERATURE: float
 
-    def url(self, driver: str = "sqlite+aiosqlite") -> str:
-        if driver.startswith("sqlite"):
-            return f"{driver}:////{DEFAULT_DATA_DIR}/{self.NAME}.{DB_FORMAT}"
+
+@dataclass
+class EncryptionConfig:
+    """Encryption configuration for sensitive data."""
+    KEY: str | None
+
+
+@dataclass
+class DatabaseConfig:
+    """PostgreSQL database configuration."""
+    HOST: str
+    PORT: int
+    NAME: str
+    USERNAME: str
+    PASSWORD: str
+
+    def url(self, driver: str = "postgresql+asyncpg") -> str:
+        """Generate database URL for SQLAlchemy."""
         return f"{driver}://{self.USERNAME}:{self.PASSWORD}@{self.HOST}:{self.PORT}/{self.NAME}"
 
 
@@ -160,61 +158,30 @@ class LoggingConfig:
 
 @dataclass
 class Config:
+    """Main configuration container."""
     bot: BotConfig
     shop: ShopConfig
     xui: XUIConfig
-    cryptomus: CryptomusConfig
-    heleket: HeleketConfig
     yookassa: YooKassaConfig
     yoomoney: YooMoneyConfig
+    deepseek: DeepSeekConfig
+    encryption: EncryptionConfig
     database: DatabaseConfig
     redis: RedisConfig
     logging: LoggingConfig
 
 
 def load_config() -> Config:
+    """Load and validate configuration from environment variables."""
     env = Env()
     env.read_env()
 
+    # Bot admins
     bot_admins = env.list("BOT_ADMINS", subcast=int, default=[], required=False)
     if not bot_admins:
         logger.warning("BOT_ADMINS list is empty.")
 
-    xui_token = env.str("XUI_TOKEN", default=None)
-    if not xui_token:
-        logger.warning("XUI_TOKEN is not set.")
-
-    payment_stars_enabled = env.bool(
-        "SHOP_PAYMENT_STARS_ENABLED",
-        default=DEFAULT_SHOP_PAYMENT_STARS_ENABLED,
-    )
-
-    payment_cryptomus_enabled = env.bool(
-        "SHOP_PAYMENT_CRYPTOMUS_ENABLED",
-        default=DEFAULT_SHOP_PAYMENT_CRYPTOMUS_ENABLED,
-    )
-    if payment_cryptomus_enabled:
-        cryptomus_api_key = env.str("CRYPTOMUS_API_KEY", default=None)
-        cryptomus_merchant_id = env.str("CRYPTOMUS_MERCHANT_ID", default=None)
-        if not cryptomus_api_key or not cryptomus_merchant_id:
-            logger.error(
-                "CRYPTOMUS_API_KEY or CRYPTOMUS_MERCHANT_ID is not set. Payment Cryptomus is disabled."
-            )
-            payment_cryptomus_enabled = False
-
-    payment_heleket_enabled = env.bool(
-        "SHOP_PAYMENT_HELEKET_ENABLED",
-        default=DEFAULT_SHOP_PAYMENT_HELEKET_ENABLED,
-    )
-    if payment_heleket_enabled:
-        heleket_api_key = env.str("HELEKET_API_KEY", default=None)
-        heleket_merchant_id = env.str("HELEKET_MERCHANT_ID", default=None)
-        if not heleket_api_key or not heleket_merchant_id:
-            logger.error(
-                "HELEKET_API_KEY or HELEKET_MERCHANT_ID is not set. Payment Heleket is disabled."
-            )
-            payment_heleket_enabled = False
-
+    # Payment validation
     payment_yookassa_enabled = env.bool(
         "SHOP_PAYMENT_YOOKASSA_ENABLED",
         default=DEFAULT_SHOP_PAYMENT_YOOKASSA_ENABLED,
@@ -241,39 +208,25 @@ def load_config() -> Config:
             )
             payment_yoomoney_enabled = False
 
-    if (
-        not payment_stars_enabled
-        and not payment_cryptomus_enabled
-        and not payment_heleket_enabled
-        and not payment_yookassa_enabled
-        and not payment_yoomoney_enabled
-    ):
-        logger.warning("No payment methods are enabled. Enabling Stars payment method.")
-        payment_stars_enabled = True
+    # Check at least one payment method is enabled
+    if not payment_yookassa_enabled and not payment_yoomoney_enabled:
+        logger.warning("No payment methods are enabled. Please enable at least one.")
 
-    referrer_reward_type = env.str(
-        "SHOP_REFERRED_REWARD_TYPE",
-        default=DEFAULT_SHOP_REFERRER_REWARD_TYPE,
-        validate=OneOf(
-            [reward_type.value for reward_type in ReferrerRewardType],
-            error="SHOP_REFERRER_REWARD_TYPE must be one of: {choices}",
-        ),
-    )
-    referrer_reward_enabled = env.bool(
-        "SHOP_REFERRER_REWARD_ENABLED", default=DEFAULT_SHOP_REFERRER_REWARD_ENABLED
-    )
-    if referrer_reward_type != ReferrerRewardType.DAYS.value:
-        logger.error(
-            "Only 'days' option is now available for SHOP_REFERRER_REWARD_TYPE. Referrer reward disabled."
-        )
-        referrer_reward_enabled = False
+    # DeepSeek validation
+    deepseek_api_key = env.str("DEEPSEEK_API_KEY", default=None)
+    if not deepseek_api_key:
+        logger.warning("DEEPSEEK_API_KEY is not set. AI support will be disabled.")
+
+    # Encryption key validation
+    encryption_key = env.str("ENCRYPTION_KEY", default=None)
+    if not encryption_key:
+        logger.warning("ENCRYPTION_KEY is not set. Corporate server encryption will be disabled.")
 
     return Config(
         bot=BotConfig(
-            TOKEN=env.str("BOT_TOKEN"),
+            TOKEN=env.str("MAX_BOT_TOKEN"),
             ADMINS=bot_admins,
-            DEV_ID=env.int("BOT_DEV_ID"),
-            SUPPORT_ID=env.int("BOT_SUPPORT_ID"),
+            DEV_ID=env.int("MAX_DEV_ID"),
             DOMAIN=f"https://{env.str('BOT_DOMAIN')}",
             PORT=env.int("BOT_PORT", default=DEFAULT_BOT_PORT),
         ),
@@ -288,72 +241,18 @@ def load_config() -> Config:
                     error="SHOP_CURRENCY must be one of: {choices}",
                 ),
             ).upper(),
-            TRIAL_ENABLED=env.bool("SHOP_TRIAL_ENABLED", default=DEFAULT_SHOP_TRIAL_ENABLED),
-            TRIAL_PERIOD=env.int("SHOP_TRIAL_PERIOD", default=DEFAULT_SHOP_TRIAL_PERIOD),
-            REFERRED_TRIAL_ENABLED=env.bool(
-                "SHOP_REFERRED_TRIAL_ENABLED", default=DEFAULT_SHOP_REFERRED_TRIAL_ENABLED
-            ),
-            REFERRED_TRIAL_PERIOD=env.int(
-                "SHOP_REFERRED_TRIAL_PERIOD",
-                default=DEFAULT_SHOP_REFERRED_TRIAL_PERIOD,
-                validate=Range(min=1, error="SHOP_REFERRED_TRIAL_PERIOD must be >= 1"),
-            ),
-            REFERRER_REWARD_ENABLED=referrer_reward_enabled,
-            REFERRER_REWARD_TYPE=referrer_reward_type,
-            REFERRER_LEVEL_ONE_PERIOD=env.int(
-                "SHOP_REFERRER_LEVEL_ONE_PERIOD",
-                default=DEFAULT_SHOP_REFERRER_LEVEL_ONE_PERIOD,
-                validate=Range(min=1, error="SHOP_REFERRER_LEVEL_ONE_PERIOD must be >= 1"),
-            ),
-            REFERRER_LEVEL_TWO_PERIOD=env.int(
-                "SHOP_REFERRER_LEVEL_TWO_PERIOD",
-                default=DEFAULT_SHOP_REFERRER_LEVEL_TWO_PERIOD,
-                validate=Range(min=1, error="SHOP_REFERRER_LEVEL_TWO_PERIOD must be >= 1"),
-            ),
-            REFERRER_LEVEL_ONE_RATE=env.int(
-                "SHOP_REFERRER_LEVEL_ONE_RATE",
-                default=DEFAULT_SHOP_REFERRER_LEVEL_ONE_RATE,
-                validate=Range(
-                    min=1,
-                    max=100,
-                    error="SHOP_REFERRER_LEVEL_ONE_RATE must be between 1 and 100",
-                ),
-            ),
-            REFERRER_LEVEL_TWO_RATE=env.int(
-                "SHOP_REFERRER_LEVEL_TWO_RATE",
-                default=DEFAULT_SHOP_REFERRER_LEVEL_TWO_RATE,
-                validate=Range(
-                    min=1,
-                    max=100,
-                    error="SHOP_REFERRER_LEVEL_TWO_RATE must be between 1 and 100",
-                ),
-            ),
-            BONUS_DEVICES_COUNT=env.int(
-                "SHOP_BONUS_DEVICES_COUNT", default=DEFAULT_SHOP_BONUS_DEVICES_COUNT
-            ),
-            PAYMENT_STARS_ENABLED=payment_stars_enabled,
-            PAYMENT_CRYPTOMUS_ENABLED=payment_cryptomus_enabled,
-            PAYMENT_HELEKET_ENABLED=payment_heleket_enabled,
             PAYMENT_YOOKASSA_ENABLED=payment_yookassa_enabled,
             PAYMENT_YOOMONEY_ENABLED=payment_yoomoney_enabled,
         ),
         xui=XUIConfig(
             USERNAME=env.str("XUI_USERNAME"),
             PASSWORD=env.str("XUI_PASSWORD"),
-            TOKEN=xui_token,
+            TOKEN=env.str("XUI_TOKEN", default=None),
             SUBSCRIPTION_PORT=env.int("XUI_SUBSCRIPTION_PORT", default=DEFAULT_SUBSCRIPTION_PORT),
             SUBSCRIPTION_PATH=env.str(
                 "XUI_SUBSCRIPTION_PATH",
                 default=DEFAULT_SUBSCRIPTION_PATH,
             ),
-        ),
-        cryptomus=CryptomusConfig(
-            API_KEY=env.str("CRYPTOMUS_API_KEY", default=None),
-            MERCHANT_ID=env.str("CRYPTOMUS_MERCHANT_ID", default=None),
-        ),
-        heleket=HeleketConfig(
-            API_KEY=env.str("HELEKET_API_KEY", default=None),
-            MERCHANT_ID=env.str("HELEKET_MERCHANT_ID", default=None),
         ),
         yookassa=YooKassaConfig(
             TOKEN=env.str("YOOKASSA_TOKEN", default=None),
@@ -363,12 +262,21 @@ def load_config() -> Config:
             NOTIFICATION_SECRET=env.str("YOOMONEY_NOTIFICATION_SECRET", default=None),
             WALLET_ID=env.str("YOOMONEY_WALLET_ID", default=None),
         ),
+        deepseek=DeepSeekConfig(
+            API_KEY=deepseek_api_key,
+            MODEL=env.str("DEEPSEEK_MODEL", default=DEFAULT_DEEPSEEK_MODEL),
+            MAX_TOKENS=env.int("DEEPSEEK_MAX_TOKENS", default=DEFAULT_DEEPSEEK_MAX_TOKENS),
+            TEMPERATURE=env.float("DEEPSEEK_TEMPERATURE", default=DEFAULT_DEEPSEEK_TEMPERATURE),
+        ),
+        encryption=EncryptionConfig(
+            KEY=encryption_key,
+        ),
         database=DatabaseConfig(
-            HOST=env.str("DB_HOST", default=None),
-            PORT=env.int("DB_PORT", default=None),
-            USERNAME=env.str("DB_USERNAME", default=None),
-            PASSWORD=env.str("DB_PASSWORD", default=None),
-            NAME=env.str("DB_NAME", default=DEFAULT_DB_NAME),
+            HOST=env.str("POSTGRES_HOST", default=DEFAULT_DB_HOST),
+            PORT=env.int("POSTGRES_PORT", default=DEFAULT_DB_PORT),
+            USERNAME=env.str("POSTGRES_USER"),
+            PASSWORD=env.str("POSTGRES_PASSWORD"),
+            NAME=env.str("POSTGRES_DB", default=DEFAULT_DB_NAME),
         ),
         redis=RedisConfig(
             HOST=env.str("REDIS_HOST", default=DEFAULT_REDIS_HOST),
