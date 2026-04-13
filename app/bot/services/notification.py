@@ -1,203 +1,230 @@
-import asyncio
+"""
+Notification Service
+
+Handles all notifications to users and developers.
+"""
+
 import logging
 
-from aiogram import Bot
-from aiogram.types import (
-    CallbackQuery,
-    ForceReply,
-    InlineKeyboardMarkup,
-    InputFile,
-    Message,
-    ReplyKeyboardMarkup,
-    ReplyKeyboardRemove,
-)
-from aiogram.utils.i18n import gettext as _
-from aiogram.utils.i18n import lazy_gettext as __
-
-from app.bot.models.subscription_data import SubscriptionData
-from app.bot.routers.misc.keyboard import close_notification_keyboard
-from app.bot.routers.subscription.keyboard import payment_success_keyboard
-from app.bot.utils.constants import MESSAGE_EFFECT_IDS
-from app.bot.utils.formatting import format_device_count, format_subscription_period
+from app.bot.max_api import MAXBot
+from app.bot.max_api.types import InlineKeyboardMarkup
 from app.config import Config
 
 logger = logging.getLogger(__name__)
 
-ReplyMarkupType = (
-    InlineKeyboardMarkup | ReplyKeyboardMarkup | ReplyKeyboardRemove | ForceReply | None
-)
-
 
 class NotificationService:
-    def __init__(self, config: Config, bot: Bot) -> None:
-        self.config = config
+    """
+    Service for sending notifications to users and developers.
+    
+    Handles:
+    - Purchase confirmations
+    - Subscription expiry warnings
+    - Payment notifications
+    - Error reports
+    - Developer alerts
+    """
+    
+    def __init__(self, bot: MAXBot, config: Config) -> None:
+        """
+        Initialize Notification Service.
+        
+        Args:
+            bot: MAX Bot instance.
+            config: Application configuration.
+        """
         self.bot = bot
-        logger.info("Notification Service initialized.")
-
-    @staticmethod
-    async def _notify(
+        self.config = config
+        
+        logger.info("Notification Service initialized")
+    
+    async def send_message(
+        self,
+        user_id: int,
         text: str,
-        duration: int,
-        *,
-        message: Message | None = None,
-        chat_id: int | None = None,
-        reply_markup: ReplyMarkupType = None,
-        document: InputFile | None = None,
-        bot: Bot | None = None,
-        message_effect_id: str | None = None,
-    ) -> Message | None:
-        if not (message or chat_id):
-            logger.error("Failed to send notification: message or chat_id required")
-            return None
-
-        if message and not bot:
-            bot = message.bot
-
-        chat_id = message.chat.id if message else chat_id
-
-        if duration == 0 and reply_markup is None:
-            reply_markup = close_notification_keyboard()
-
-        send_method = bot.send_document if document else bot.send_message
-        args = {"document": document, "caption": text} if document else {"text": text}
-
-        if message_effect_id:
-            args["message_effect_id"] = message_effect_id
-
+        reply_markup: InlineKeyboardMarkup | None = None,
+        parse_mode: str = "html",
+    ) -> bool:
+        """
+        Send message to user.
+        
+        Args:
+            user_id: MAX user ID.
+            text: Message text.
+            reply_markup: Optional keyboard.
+            parse_mode: Message format (html/markdown).
+            
+        Returns:
+            True if message sent successfully.
+        """
         try:
-            notification = await send_method(chat_id=chat_id, reply_markup=reply_markup, **args)
-            logger.debug(f"Notification sent to {chat_id}")
-        except Exception as exception:
-            logger.error(f"Failed to send notification: {exception}")
-            return None
-
-        if duration > 0:
-            await asyncio.sleep(duration)
-            try:
-                await notification.delete()
-            except Exception as exception:
-                logger.error(f"Failed to delete message {notification.message_id}: {exception}")
-
-        return notification
-
-    async def notify_by_id(
-        self,
-        chat_id: int,
-        text: str,
-        duration: int = 0,
-        reply_markup: ReplyMarkupType = None,
-        document: InputFile | None = None,
-        message_effect_id: str | None = None,
-    ) -> Message | None:
-        return await self._notify(
-            text=text,
-            duration=duration,
-            chat_id=chat_id,
-            reply_markup=reply_markup,
-            document=document,
-            bot=self.bot,
-            message_effect_id=message_effect_id,
-        )
-
-    @staticmethod
-    async def notify_by_message(
-        message: Message,
-        text: str,
-        duration: int = 0,
-        reply_markup: ReplyMarkupType = None,
-        document: InputFile | None = None,
-    ) -> Message | None:
-        return await NotificationService._notify(
-            text=text,
-            duration=duration,
-            message=message,
-            reply_markup=reply_markup,
-            document=document,
-        )
-
-    async def notify_admins(
-        self,
-        text: str,
-        duration: int = 0,
-        reply_markup: ReplyMarkupType = None,
-        document: InputFile | None = None,
-    ) -> None:
-        if not self.config.bot.ADMINS:
-            logger.warning("Admin list is empty. No notifications will be sent.")
-            return
-
-        for chat_id in self.config.bot.ADMINS:
-            await self._notify(
+            await self.bot.send_message(
+                chat_id=user_id,
                 text=text,
-                duration=duration,
-                chat_id=chat_id,
+                parse_mode=parse_mode,
                 reply_markup=reply_markup,
-                document=document,
-                bot=self.bot,
             )
-
-    async def notify_developer(
-        self,
-        text: str,
-        duration: int = 0,
-        reply_markup: ReplyMarkupType = None,
-        document: InputFile | None = None,
-    ) -> None:
-        await self._notify(
-            text=text,
-            duration=duration,
-            chat_id=self.config.bot.DEV_ID,
-            reply_markup=reply_markup,
-            document=document,
-            bot=self.bot,
-        )
-
-    @staticmethod
-    async def show_popup(callback: CallbackQuery, text: str, cache_time: int = 0) -> None:
-        try:
-            await callback.answer(text=text, show_alert=True, cache_time=cache_time)
-            logger.debug(f"Popup sent to {callback.from_user.id}")
-        except Exception as exception:
-            logger.error(f"Failed to send popup: {exception}")
-
+            return True
+        except Exception as e:
+            logger.error(f"Failed to send message to user {user_id}: {e}")
+            return False
+    
     async def notify_purchase_success(
         self,
         user_id: int,
         key: str,
-        message_effect_id: str = MESSAGE_EFFECT_IDS["🎉"],
-    ) -> None:
-        await self.notify_by_id(
-            chat_id=user_id,
-            text=__("payment:message:purchase_success").format(key=key),
-            message_effect_id=message_effect_id,
-            reply_markup=payment_success_keyboard(),
+        duration: int,
+    ) -> bool:
+        """
+        Notify user about successful purchase.
+        
+        Args:
+            user_id: User ID.
+            key: VPN subscription key.
+            duration: Subscription duration in days.
+            
+        Returns:
+            True if notification sent.
+        """
+        text = (
+            f"✅ <b>Оплата прошла успешно!</b>\n\n"
+            f"🎉 Ваша VPN подписка активирована\n"
+            f"📅 Срок: {duration} дней\n\n"
+            f"🔑 <b>Ваш ключ доступа:</b>\n"
+            f"<code>{key}</code>\n\n"
+            f"📱 <b>Инструкция по подключению:</b>\n"
+            f"1. Скачайте приложение V2rayNG (Android) или V2rayU (iOS)\n"
+            f"2. Нажмите '+' → 'Import from clipboard'\n"
+            f"3. Подключитесь к серверу\n\n"
+            f"💡 Если возникнут вопросы - нажмите /support"
         )
-
+        
+        return await self.send_message(user_id, text, parse_mode="html")
+    
     async def notify_extend_success(
         self,
         user_id: int,
-        data: SubscriptionData,
-        message_effect_id: str = MESSAGE_EFFECT_IDS["🎉"],
-    ) -> None:
-        await self.notify_by_id(
-            chat_id=user_id,
-            text=__("payment:message:extend_success").format(
-                duration=format_subscription_period(data.duration)
-            ),
-            message_effect_id=message_effect_id,
+        duration: int,
+    ) -> bool:
+        """
+        Notify user about successful subscription extension.
+        
+        Args:
+            user_id: User ID.
+            duration: Extension duration in days.
+            
+        Returns:
+            True if notification sent.
+        """
+        text = (
+            f"✅ <b>Подписка продлена!</b>\n\n"
+            f"📅 Добавлено: {duration} дней\n"
+            f"💡 Ваш ключ доступа не изменился\n\n"
+            f"Приятного использования! 🚀"
         )
-
-    async def notify_change_success(
+        
+        return await self.send_message(user_id, text, parse_mode="html")
+    
+    async def notify_expiry_warning(
         self,
         user_id: int,
-        data: SubscriptionData,
-        message_effect_id: str = MESSAGE_EFFECT_IDS["🎉"],
-    ) -> None:
-        await self.notify_by_id(
-            chat_id=user_id,
-            text=__("payment:message:change_success").format(
-                device=format_device_count(data.devices),
-                duration=format_subscription_period(data.duration),
-            ),
-            message_effect_id=message_effect_id,
+        days_left: int,
+    ) -> bool:
+        """
+        Warn user about subscription expiry.
+        
+        Args:
+            user_id: User ID.
+            days_left: Days remaining.
+            
+        Returns:
+            True if notification sent.
+        """
+        text = (
+            f"⚠️ <b>Внимание! Подписка истекает</b>\n\n"
+            f"📅 До окончания: {days_left} дней\n\n"
+            f"💡 Продлите подписку, чтобы не потерять доступ:\n"
+            f"Нажмите /subscription для выбора тарифа"
         )
+        
+        return await self.send_message(user_id, text, parse_mode="html")
+    
+    async def notify_developer(self, text: str) -> bool:
+        """
+        Send notification to developer/admin.
+        
+        Args:
+            text: Notification text.
+            
+        Returns:
+            True if notification sent.
+        """
+        if not self.config.bot.ADMINS:
+            logger.warning("No admins configured, skipping developer notification")
+            return False
+        
+        # Send to first admin (developer)
+        admin_id = self.config.bot.ADMINS[0]
+        
+        try:
+            await self.bot.send_message(
+                chat_id=admin_id,
+                text=text,
+                parse_mode="html",
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Failed to notify developer: {e}")
+            return False
+    
+    async def notify_coupon_received(
+        self,
+        user_id: int,
+        coupon_code: str,
+        discount_percent: int,
+    ) -> bool:
+        """
+        Notify user about receiving a coupon.
+        
+        Args:
+            user_id: User ID.
+            coupon_code: Coupon code.
+            discount_percent: Discount percentage.
+            
+        Returns:
+            True if notification sent.
+        """
+        text = (
+            f"🎁 <b>Вам начислен купон!</b>\n\n"
+            f"📝 Код: <code>{coupon_code}</code>\n"
+            f"💰 Скидка: {discount_percent}%\n"
+            f"📅 Действует 1 год\n\n"
+            f"Используйте купон при следующей оплате!"
+        )
+        
+        return await self.send_message(user_id, text, parse_mode="html")
+    
+    async def notify_referral_success(
+        self,
+        user_id: int,
+        referral_count: int,
+    ) -> bool:
+        """
+        Notify user about successful referral.
+        
+        Args:
+            user_id: User ID.
+            referral_count: Total referrals count.
+            
+        Returns:
+            True if notification sent.
+        """
+        text = (
+            f"🎉 <b>Реферал активирован!</b>\n\n"
+            f"👥 Всего приглашено: {referral_count}\n"
+            f"💰 Ваша скидка: {referral_count * 10}%\n\n"
+            f"Продолжайте приглашать друзей! "
+            f"Максимальная скидка: 50%"
+        )
+        
+        return await self.send_message(user_id, text, parse_mode="html")

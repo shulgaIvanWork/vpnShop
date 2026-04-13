@@ -1,40 +1,59 @@
-from aiogram import Bot
-from sqlalchemy.ext.asyncio import async_sessionmaker
+"""
+Services Container
 
-from app.bot.models import ServicesContainer
-from app.config import Config
+Central container for all bot services.
+"""
 
-from .invite_stats import InviteStatsService
-from .notification import NotificationService
-from .payment_stats import PaymentStatsService
-from .plan import PlanService
-from .referral import ReferralService
-from .server_pool import ServerPoolService
-from .subscription import SubscriptionService
-from .vpn import VPNService
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+    from app.config import Config
+    from app.bot.max_api import MAXBot
+    
+    from app.bot.services.vpn import VPNService
+    from app.bot.services.notification import NotificationService
+    from app.bot.services.coupon import CouponService
 
 
-async def initialize(
-    config: Config,
-    session: async_sessionmaker,
-    bot: Bot,
-) -> ServicesContainer:
-    server_pool = ServerPoolService(config=config, session=session)
-    plan = PlanService()
-    vpn = VPNService(config=config, session=session, server_pool_service=server_pool)
-    notification = NotificationService(config=config, bot=bot)
-    referral = ReferralService(config=config, session_factory=session, vpn_service=vpn)
-    subscription = SubscriptionService(config=config, session_factory=session, vpn_service=vpn)
-    payment_stats = PaymentStatsService(session_factory=session)
-    invite_stats = InviteStatsService(session_factory=session, payment_stats_service=payment_stats)
-
-    return ServicesContainer(
-        server_pool=server_pool,
-        plan=plan,
-        vpn=vpn,
-        notification=notification,
-        referral=referral,
-        subscription=subscription,
-        payment_stats=payment_stats,
-        invite_stats=invite_stats,
-    )
+@dataclass
+class ServicesContainer:
+    """
+    Container for all bot services.
+    
+    Provides centralized access to services used across handlers.
+    """
+    vpn: "VPNService"
+    notification: "NotificationService"
+    coupon: "CouponService"
+    
+    @classmethod
+    def create(
+        cls,
+        config: "Config",
+        bot: "MAXBot",
+        session: "async_sessionmaker",
+    ) -> "ServicesContainer":
+        """
+        Create ServicesContainer with all services initialized.
+        
+        Args:
+            config: Application configuration.
+            bot: MAX Bot instance.
+            session: SQLAlchemy async session maker.
+            
+        Returns:
+            Initialized ServicesContainer.
+        """
+        from app.bot.services.vpn import VPNService
+        from app.bot.services.notification import NotificationService
+        from app.bot.services.coupon import CouponService
+        
+        return cls(
+            vpn=VPNService(config=config, session=session),
+            notification=NotificationService(bot=bot, config=config),
+            coupon=CouponService(session=session),
+        )
