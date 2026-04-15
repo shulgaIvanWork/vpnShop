@@ -138,3 +138,45 @@ class User(Base):
     async def exists(cls, session: AsyncSession, max_user_id: int) -> bool:
         """Check if user exists."""
         return await User.get(session=session, max_user_id=max_user_id) is not None
+
+    @classmethod
+    async def get_or_create(
+        cls, session: AsyncSession, max_user_id: int, username: str = None, **kwargs: Any
+    ) -> tuple[Self, bool]:
+        """
+        Get existing user or create new one.
+        
+        Returns:
+            Tuple of (user, created) where created is True if user was just created.
+        """
+        user = await User.get(session=session, max_user_id=max_user_id)
+        
+        if user:
+            return user, False
+        
+        user = await User.create(
+            session=session,
+            max_user_id=max_user_id,
+            username=username,
+            **kwargs
+        )
+        return user, True
+
+    async def update_subscription(
+        self, session: AsyncSession, subscription_end: datetime = None, uuid: str = None,
+        assigned_server: str = None, device_limit: int = None
+    ) -> None:
+        """Update user subscription details."""
+        updates = {}
+        if subscription_end is not None:
+            updates['subscription_end'] = subscription_end
+        if uuid is not None:
+            updates['uuid'] = uuid
+        if assigned_server is not None:
+            updates['assigned_server'] = assigned_server
+        if device_limit is not None:
+            updates['device_limit'] = device_limit
+        
+        if updates:
+            await User.update(session=session, max_user_id=self.max_user_id, **updates)
+            logger.info(f"User {self.max_user_id} subscription updated: {updates}")

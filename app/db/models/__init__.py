@@ -5,6 +5,7 @@ from .referral import Referral
 from .coupon import Coupon
 from .server import Server
 from .corporate_server import CorporateServer
+from .manual_payment import ManualPayment
 
 __all__ = [
     "Base",
@@ -14,4 +15,5 @@ __all__ = [
     "Coupon",
     "Server",
     "CorporateServer",
+    "ManualPayment",
 ]

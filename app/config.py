@@ -21,7 +21,7 @@ DEFAULT_BOT_HOST = "0.0.0.0"
 DEFAULT_BOT_PORT = 8080
 
 DEFAULT_SHOP_EMAIL = "support@vpn-shop.ru"
-DEFAULT_SHOP_CURRENCY = Currency.RUB.code
+DEFAULT_SHOP_CURRENCY = Currency.RUB.value['code']
 
 # Payment defaults
 DEFAULT_SHOP_PAYMENT_YOOKASSA_ENABLED = False
@@ -122,6 +122,14 @@ class EncryptionConfig:
 
 
 @dataclass
+class SberPaymentConfig:
+    """Sber QR payment configuration for manual payments."""
+    PAYMENT_URL: str
+    PHONE_NUMBER: str
+    RECEIPT_NAME: str
+
+
+@dataclass
 class DatabaseConfig:
     """PostgreSQL database configuration."""
     HOST: str
@@ -166,6 +174,7 @@ class Config:
     yoomoney: YooMoneyConfig
     deepseek: DeepSeekConfig
     encryption: EncryptionConfig
+    sber: SberPaymentConfig
     database: DatabaseConfig
     redis: RedisConfig
     logging: LoggingConfig
@@ -270,6 +279,11 @@ def load_config() -> Config:
         ),
         encryption=EncryptionConfig(
             KEY=encryption_key,
+        ),
+        sber=SberPaymentConfig(
+            PAYMENT_URL=env.str("SBER_PAYMENT_URL", default="https://www.sberbank.ru/ru/choise_bank"),
+            PHONE_NUMBER=env.str("SBER_PHONE_NUMBER", default="+79001234567"),
+            RECEIPT_NAME=env.str("SBER_RECEIPT_NAME", default="Иван И."),
         ),
         database=DatabaseConfig(
             HOST=env.str("POSTGRES_HOST", default=DEFAULT_DB_HOST),

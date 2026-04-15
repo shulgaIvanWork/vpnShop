@@ -123,3 +123,13 @@ class Payment(Base):
             .order_by(Payment.created_at.desc())
         )
         return query.scalars().all()
+
+    @classmethod
+    async def get_pending_payments(cls, session: AsyncSession) -> list[Self]:
+        """Get all pending payments (for manual approval)."""
+        query = await session.execute(
+            select(Payment)
+            .where(Payment.status == "pending")
+            .order_by(Payment.created_at.desc())
+        )
+        return query.scalars().all()

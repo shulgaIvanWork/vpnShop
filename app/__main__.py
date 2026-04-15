@@ -127,6 +127,11 @@ async def register_handlers(
         handle_payment_method_selection,
         handle_apply_coupon,
     )
+    from app.bot.routers.subscription.receipt_handler import (
+        handle_receipt_submission,
+        handle_receipt_photo,
+        handle_receipt_text,
+    )
     from app.bot.routers.profile.handler import (
         handle_profile,
         handle_show_key,
@@ -141,6 +146,12 @@ async def register_handlers(
         handle_support,
         handle_faq,
         handle_support_contact,
+    )
+    from app.bot.routers.admin_tools.payment_approval import (
+        handle_admin_approve,
+        handle_admin_reject,
+        handle_rejection_reason,
+        handle_admin_cancel_rejection,
     )
     
     # ===== COMMANDS =====
@@ -206,6 +217,26 @@ async def register_handlers(
             config=config,
         )
     
+    # /cancel command
+    @dispatcher.message_handler(commands=["cancel"])
+    async def cancel_handler(update: Update):
+        await handle_admin_cancel_rejection(bot, update, services, config)
+    
+    # ===== PHOTO/TEXT HANDLERS (for receipts) =====
+    
+    @dispatcher.message_handler(content_types=["photo"])
+    async def photo_handler(update: Update):
+        """Handle photo messages (receipt screenshots)."""
+        await handle_receipt_photo(bot, update, services, config)
+    
+    @dispatcher.message_handler(content_types=["text"])
+    async def text_handler(update: Update):
+        """Handle text messages (check if it's a receipt)."""
+        # Ignore commands
+        if update.message.text.startswith('/'):
+            return
+        await handle_receipt_text(bot, update, services, config)
+    
     # ===== CALLBACK HANDLERS =====
     
     @dispatcher.callback_query_handler(lambda c: True)
@@ -232,6 +263,8 @@ async def register_handlers(
             duration = int(parts[1])
             price = float(parts[2])
             await handle_plan_selection(bot, update, services, config, duration, price)
+        elif callback_data == "payment_sber_qr":
+            await handle_payment_method_selection(bot, update, services, config, "sber_qr")
         elif callback_data == "payment_yookassa":
             await handle_payment_method_selection(bot, update, services, config, "yookassa")
         elif callback_data == "payment_yoomoney":
@@ -262,6 +295,18 @@ async def register_handlers(
             await handle_faq(bot, update, services, config)
         elif callback_data == "support_contact":
             await handle_support_contact(bot, update, services, config)
+        
+        # Receipt callbacks
+        elif callback_data == "send_receipt":
+            await handle_receipt_submission(bot, update, services, config)
+        
+        # Admin payment approval callbacks
+        elif callback_data.startswith("admin_approve_"):
+            payment_id = int(callback_data.split("_")[-1])
+            await handle_admin_approve(bot, update, services, config, payment_id)
+        elif callback_data.startswith("admin_reject_"):
+            payment_id = int(callback_data.split("_")[-1])
+            await handle_admin_reject(bot, update, services, config, payment_id)
 
 
 if __name__ == "__main__":

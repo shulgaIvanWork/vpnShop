@@ -16,7 +16,7 @@ maxapi = "^1.0.0"
 # client3x - will be added when available
 
 # Payment Gateways
-yookassa = "^3.4.3"
+# yookassa = "^3.4.3"  # Temporarily disabled - causes installation issues
 yoomoney = "^0.1.0"
 
 # Database

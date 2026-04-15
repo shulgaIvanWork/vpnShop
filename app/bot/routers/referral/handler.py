@@ -53,29 +53,45 @@ async def handle_referral(
     """
     user_id = update.message.from_user.id if update.message else update.callback_query.from_user.id
     
-    # TODO: Get actual referral data
-    referral_count = 0
-    discount_percent = 0
-    max_discount = 50
+    # Get user from database
+    async with config.db.session() as session:
+        user = await User.get(session, max_user_id=user_id)
+        
+        if not user:
+            await bot.send_message(
+                chat_id=user_id,
+                text="❌ Ошибка: пользователь не найден. Используйте /start",
+                parse_mode="html",
+            )
+            return
+        
+        # Get referral stats
+        from app.db.models.referral import Referral
+        referral_stats = await Referral.get_referrer_stats(session, user.id)
+        
+        # Get total discount from coupons
+        from app.db.models.coupon import Coupon
+        total_discount = await Coupon.get_total_user_discount(session, user.id)
     
     # Generate referral link
-    # TODO: Replace with actual bot username
-    bot_username = "YourVPNBot"
+    bot_username = "id720212246590_1_bot"
     referral_link = f"https://max.ru/{bot_username}?start=ref_{user_id}"
     
     text = (
         f"🎁 <b>Реферальная программа</b>\n\n"
-        f"👥 Приглашено друзей: <b>{referral_count}</b>\n"
-        f"💰 Ваша скидка: <b>{discount_percent}%</b>\n"
-        f"📈 Максимальная скидка: <b>{max_discount}%</b>\n\n"
+        f"👥 Приглашено друзей: <b>{referral_stats['total_referrals']}</b>\n"
+        f"✅ Получено скидок: <b>{referral_stats['rewarded']}</b>\n"
+        f"⏳ Ожидается: <b>{referral_stats['pending']}</b>\n"
+        f"💰 Ваша текущая скидка: <b>{total_discount}%</b>\n"
+        f"📈 Максимальная скидка: <b>50%</b>\n\n"
         f"🔗 <b>Ваша реферальная ссылка:</b>\n"
         f"<code>{referral_link}</code>\n\n"
         f"💡 <b>Как это работает:</b>\n"
         f"• Поделитесь ссылкой с друзьями\n"
-        f"• За каждого друга получите +10% скидки\n"
-        f"• Скидка применяется автоматически\n"
-        f"• Максимальная скидка: 50%\n\n"
-        f"🎫 Купоны за рефералов действуют 1 год!"
+        f"• Когда друг оплатит подписку, вы получите купон на 10%\n"
+        f"• Купоны суммируются до 50%\n"
+        f"• Купон действует 1 год\n\n"
+        f"🎫 Ваши активные купоны можно посмотреть ниже!"
     )
     
     keyboard = create_referral_keyboard()

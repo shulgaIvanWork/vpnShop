@@ -184,3 +184,14 @@ class Coupon(Base):
         """Get only valid (unused and not expired) coupons for a user."""
         coupons = await cls.get_user_coupons(session, user_id, include_used=False)
         return [c for c in coupons if c.is_valid]
+
+    @classmethod
+    async def get_total_user_discount(cls, session: AsyncSession, user_id: int) -> int:
+        """
+        Get total available discount percentage for user.
+        
+        Sums up all active coupon discounts (max 50%).
+        """
+        coupons = await cls.get_user_active_coupons(session, user_id)
+        total_discount = sum(c.discount_percent for c in coupons)
+        return min(total_discount, 50)  # Cap at 50%

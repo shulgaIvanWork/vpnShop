@@ -12,7 +12,9 @@ if TYPE_CHECKING:
         SubscriptionService,
         PaymentStatsService,
         InviteStatsService,
+        SberPaymentService,
     )
+    from app.bot.fsm.storage import FSMStorage
 
 from dataclasses import dataclass
 
@@ -27,3 +29,5 @@ class ServicesContainer:
     subscription: SubscriptionService
     payment_stats: PaymentStatsService
     invite_stats: InviteStatsService
+    fsm: FSMStorage  # FSM storage for payment flow
+    sber_payment: SberPaymentService  # Sber QR payment service
