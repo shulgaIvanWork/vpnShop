@@ -245,8 +245,8 @@ def load_config() -> Config:
                 "SHOP_CURRENCY",
                 default=DEFAULT_SHOP_CURRENCY,
                 validate=OneOf(
-                    [currency.code for currency in Currency]
-                    + [currency.code.lower() for currency in Currency],
+                    [currency.value['code'] for currency in Currency]
+                    + [currency.value['code'].lower() for currency in Currency],
                     error="SHOP_CURRENCY must be one of: {choices}",
                 ),
             ).upper(),
