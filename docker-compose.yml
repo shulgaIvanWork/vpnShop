@@ -39,7 +39,7 @@ services:
     restart: unless-stopped
     command: >
       sh -c "
-        poetry run alembic -c /app/db/alembic.ini upgrade head &&
+        cd /app/app/db && PYTHONPATH=/app poetry run alembic -c alembic.ini upgrade head && cd /app &&
         poetry run python /app/__main__.py"
     depends_on:
       postgres:
